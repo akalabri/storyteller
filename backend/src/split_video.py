@@ -50,3 +50,10 @@ def split_video(filepath, segment_duration) -> list[str]:
         outputs.append(output)
 
     return outputs
+
+
+if __name__ == "__main__":
+    video_path = "../videos/story.mp4"
+    seg_dur = 15
+    result = split_video(video_path, seg_dur)
+    print(f"Done! {len(result)} segments saved: {result}")

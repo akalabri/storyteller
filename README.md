@@ -8,3 +8,8 @@ project for gemini live agent challenge
   . .\add_gcloud_path.ps1
   ```
   Then you can run `gcloud` in that session.
+
+## ffmpeg (Linux)
+```bash
+sudo apt-get update && sudo apt-get install ffmpeg
+```
