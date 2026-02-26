@@ -61,7 +61,6 @@ def auto_find_segments(base_file):
     return files
 
 
-<<<<<<< HEAD
 def main():
     inputs = ["../videos/story_1.mp4", "../videos/story_2.mp4", "../videos/story_3.mp4"]
     output = "../videos/story_merged.mp4"
@@ -69,10 +68,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-=======
-if __name__ == "__main__":
-
-    inputs = ["../videos/story_1.mp4", "../videos/story_2.mp4", "../videos/story_3.mp4"]
-    output = "../videos/story_merged.mp4"
-    merge_videos(inputs, output)
->>>>>>> da3daa2bda9703d7c15bd87f92c3b10e62f0f97c
