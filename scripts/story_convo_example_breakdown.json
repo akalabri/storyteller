@@ -1,0 +1,19 @@
+{
+  "story": [
+    "The sun rose gently over the small farm, and Hamza hurried outside before breakfast. His favorite goat, Zaytoun, was already awake, nibbling on fresh grass. “Good morning, Zaytoun!” Hamza laughed, patting her soft white head. His father called from behind him, “Hamza, please make sure the small wooden gate is closed after you feed them.” “I promise, Baba!” he replied confidently.",
+    "After feeding the goats, Hamza heard his friends calling him from the road. Excited, he ran to play — forgetting to check the gate. An hour later, Baba’s voice echoed across the yard. “Hamza! Zaytoun is not here!” Hamza’s heart began to beat fast. He remembered the gate. It might have been left open.",
+    "He could say nothing. Maybe Baba would think the wind pushed it open. But his chest felt heavy. Hamza walked slowly to his father. “Baba… I forgot to close the gate. I’m sorry.” There was silence for a moment. Then Baba placed his hand gently on Hamza’s shoulder. “Thank you for telling the truth. Let’s go find Zaytoun together.”",
+    "They found Zaytoun near the olive trees at the edge of the farm, happily chewing leaves. On the way back, Baba smiled. “Everyone makes mistakes, Hamza. But honesty always brings you back to the right place.” Hamza looked at Zaytoun and smiled. His heart felt light again. And from that day on, whenever he closed the gate, he remembered — telling the truth is the bravest promise of all."
+  ],
+  "characters_prompts": [
+    {
+      "name": "Hamza",
+      "description": "A young Arab boy, around 6-8 years old, with an energetic and slim build. He has a round face with large, expressive, curious brown eyes and a small nose. His skin tone is a light olive, sun-kissed from playing outside on the farm. He has short, slightly messy dark brown hair. He wears simple, practical clothing: a light blue short-sleeved cotton t-shirt and loose-fitting brown trousers. On his feet are simple, sturdy sandals suitable for running around a farm."
+    },
+    {
+      "name": "Baba",
+      "description": "An Arab man in his late 30s or early 40s, with a kind and gentle face. He has warm brown eyes, with smile lines at the corners. He has a short, neatly-trimmed dark beard and moustache. His skin is tanned from working outdoors. He has a sturdy, capable build with broad shoulders. He is dressed in practical farm attire: a loose-fitting, long-sleeved beige button-up shirt and dark work trousers. He wears durable leather work boots."
+    }
+  ],
+  "special_instructions": "The story has a gentle, educational tone for a young child, teaching the moral that honesty is important. The visual style should reflect a contemporary, everyday farm life. Characters should be depicted as Arab, and the names Hamza and Zaytoun should be used as specified."
+}
