@@ -1,5 +1,8 @@
 key.json
 
+# Generated story assets (audio and images)
+scripts/output_narration/
+scripts/output_characters/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
