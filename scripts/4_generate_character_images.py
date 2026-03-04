@@ -12,18 +12,20 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 
 PROJECT_ID   = os.environ.get("GOOGLE_CLOUD_PROJECT", "challengegemini")
-LOCATION     = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
-# Use gemini-2.5-flash-image (stable). If your project has access to preview:
-# MODEL = "gemini-3-pro-image-preview"
-MODEL = "gemini-2.5-flash-image"
-ASPECT_RATIO = "16:9"
+# Gemini image models require global endpoint; us-central1 returns "model not found".
+LOCATION     = "global"
+# Nano Banana 2. If 404, try gemini-3.1-flash-image (no -preview) or gemini-2.5-flash-image-preview.
+MODEL = "gemini-3.1-flash-image-preview"
+# MODEL = "gemini-3.1-flash-image"
+# MODEL = "gemini-2.5-flash-image-preview"
+ASPECT_RATIO = "9:16"  # vertical / portrait (phone-style)
 RESOLUTION   = "2K"
 
 CHARACTER_SHEET_PREFIX = (
-    "Character reference sheet for a 2D animated children's story illustration. "
+    "Character reference sheet for a 2d story illustration. "
     "Show the character from three angles on a clean white background: "
     "front view (center), side profile (left), and back view (right). "
-    "Include a small close-up of the face in the top corner. "
+    "Include a small close-up of the face and head in the top corner. "
     "Consistent lighting, flat style suitable for animation. "
     "Character details: "
 )
@@ -93,7 +95,7 @@ def main():
     client = genai.Client(
         vertexai=True,
         project=PROJECT_ID,
-        location=LOCATION,
+        location=LOCATION,  # forced global for image models (see LOCATION above)
     )
 
     print(f"Generating reference sheets for {len(characters)} character(s)...\n")
