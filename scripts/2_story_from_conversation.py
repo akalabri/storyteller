@@ -55,9 +55,8 @@ between a user and an AI storyteller. Your job is to analyse that conversation a
 structured output with three components.
 
 1. story — Split the final story into 3–5 scenes. Write each scene as genuine narrative prose 
-   (the story itself, not a description of it). Use the exact story content from the conversation; 
-   do not invent new plot points. Choose the number of scenes that best serves the story — some 
-   stories are complete in 3 scenes, others need 5.
+   (the story itself, not a description of it). Use similar story content from the conversation and make it adhere to your instructions
+   some stories are complete in 3 scenes, others need 5. see which one is best for the story. 
 
 2. characters_prompts — Identify every main character that appears in the story. For each one, 
    craft a detailed visual prompt suitable for generating a reference character-sheet image. 
