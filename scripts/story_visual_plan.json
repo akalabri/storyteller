@@ -1,0 +1,109 @@
+{
+  "scenes": [
+    {
+      "scene_index": 1,
+      "scene_summary": "A small, cold fox finds a mysterious, glowing key half-buried in the snow-covered forest.",
+      "subscenes": [
+        {
+          "index": 1,
+          "image_prompt": "Wide shot of a vast, silent forest buried in deep snow. A small red fox steps out from beneath the heavy, snow-laden branches of a large pine tree, her small body contrasting with the immense scale of the forest. The lighting is the soft, cool blue of pre-dawn. Her breath mists in the cold air, and her expression is one of caution and loneliness. The camera angle is slightly high, looking down, emphasizing her solitude. Foreground: delicate, frosted ferns peeking through the snow. The art style is a gentle, painterly illustration with soft textures.",
+          "video_prompt": "A few snowflakes drift slowly down through the still air. The fox's ears twitch slightly, listening. Her breath appears as a soft, slow puff of mist. The camera makes a gentle, almost imperceptible drift to the right."
+        },
+        {
+          "index": 2,
+          "image_prompt": "Medium shot, low-angle, looking over the fox's shoulder. Her attention is completely fixed on a tiny glint of golden light in the snow ahead—a key, half-buried in ice. A shallow depth-of-field keeps the fox's head and shoulders in soft focus in the foreground, while the key is the sharpest point in the image. Her expression has shifted from caution to intense curiosity, her eyes wide. The light from the key casts a small, warm, star-like glow on the surrounding blue snow. The background is a soft blur of snow-covered trees.",
+          "video_prompt": "The camera slowly pushes in towards the key. A single snowflake lands near the key and melts. The fox takes a single, tentative step forward, her paw just entering the frame. The light from the key flickers subtly."
+        },
+        {
+          "index": 3,
+          "image_prompt": "Extreme close-up shot. The small fox's paws are gently brushing the last bits of snow and ice away from an ornate brass key. One paw delicately holds the key, lifting it slightly from its icy bed. The key gleams with a warm, inner light, reflecting in the fox's curious dark eyes, which are visible at the top of the frame. The lighting is intimate and magical, with the key itself being the primary light source, casting a warm amber glow upwards onto her muzzle. Her expression is one of wonder and discovery.",
+          "video_prompt": "The fox's breath mists gently around the key. Her claws make a tiny, silent scratching motion as she secures her grip. The internal light of the key pulses with a soft, slow rhythm. A tiny wisp of snow dislodged by her paw drifts away."
+        }
+      ]
+    },
+    {
+      "scene_index": 2,
+      "scene_summary": "The fox follows a feeling to a hollow tree, where the key opens a hidden lock, revealing glowing walls with ancient carvings.",
+      "subscenes": [
+        {
+          "index": 1,
+          "image_prompt": "Medium shot. The small fox stands before a massive, ancient hollow tree, looking up with awe. The key around her neck is faintly glowing, casting a soft, warm light on her chest that contrasts with the cool blue light of the winter forest. The camera angle is low, making the tree look immense and mysterious. In the foreground, a gnarled root covered in moss breaks through the snow.",
+          "video_prompt": "The glow from the key on her neck pulses gently. She takes a slow step closer to the tree trunk, her head tilting up. A light breeze rustles the bare branches high above. The camera pans up slowly from the fox to the hollow opening in the tree."
+        },
+        {
+          "index": 2,
+          "image_prompt": "Tight over-the-shoulder shot, focusing on the fox's interaction with the tree. We see her from behind as she stands on her hind legs, her front paws on the bark, inserting the glowing key into a perfectly-shaped keyhole hidden within the gnarled texture. The key and lock emit a soft, magical golden light that spills out, illuminating the intricate patterns of the bark and catching the fur on her paws. Her body posture is one of focused anticipation.",
+          "video_prompt": "As the key turns, lines of light trace outwards from the keyhole along the grain of the wood. A few loose bits of bark dust fall away. The camera pushes in slowly as the lock mechanism makes a soft click. The fox's ears are perked forward intently."
+        },
+        {
+          "index": 3,
+          "image_prompt": "Interior shot from inside the hollow tree, looking at the small fox as she peers in. Her silhouette is framed by the entrance. The inner walls of the tree are covered in simple, ancient carvings of other foxes and a sentence, all glowing with a warm, soft, ambient light. The fox's face is illuminated by this light, her expression filled with wonder and a dawning understanding as her eyes trace the carved words.",
+          "video_prompt": "The internal light of the tree walls flickers softly, like a gentle flame. The fox's eyes move slowly, following the carved sentence. A slow, subtle zoom towards her face captures her expression of awe. Motes of glowing dust float in the air inside the hollow."
+        }
+      ]
+    },
+    {
+      "scene_index": 3,
+      "scene_summary": "With the key around her neck, the fox continues her journey with new purpose as the snowy landscape begins to give way to signs of spring.",
+      "subscenes": [
+        {
+          "index": 1,
+          "image_prompt": "Medium-wide shot. The small fox walks away from the hollow tree, seen in the background. The key is now on a cord around her neck, resting on her chest and glowing faintly. She walks with a new sense of purpose, head held higher. The forest is still snowy, but the lighting is brighter morning light, casting a long shadow behind her. The art style is painterly and hopeful.",
+          "video_prompt": "The camera tracks alongside her as she walks, keeping her centered in the frame. Her paws leave a fresh set of tracks in the snow. The key around her neck sways gently with her movement. Snow falls from a branch in the background."
+        },
+        {
+          "index": 2,
+          "image_prompt": "Low-angle shot, close on the fox's paws as she walks. The camera is focused on the ground, showing a clear transition: her paw first steps in deep snow, then on a patch of damp earth, and finally next to a small clump of vibrant green moss breaking through the thinning snow. Soft morning sunlight filters through the trees, catching the moisture on the ground.",
+          "video_prompt": "The camera pans slowly, following the path of her steps across the different textures. A drop of melted snow falls from a branch above and lands on a green leaf. Steam rises faintly from the damp earth where the sun hits it."
+        },
+        {
+          "index": 3,
+          "image_prompt": "Medium close-up on the fox, now in a part of the forest with much less snow. She has paused, looking forward with an expression of intense, hopeful searching. Her eyes are wide and focused on something unseen in the distance. The background shows a mix of snow patches and green ground under bright, optimistic, dappled sunlight. Her demeanor is one of active, hopeful seeking.",
+          "video_prompt": "A slow push-in on her face, emphasizing her determined and hopeful expression. Her ears swivel slightly, catching a distant, unheard sound. A gentle breeze rustles the fur on her neck. The key glows a little brighter for a moment."
+        }
+      ]
+    },
+    {
+      "scene_index": 4,
+      "scene_summary": "The fox arrives at a cottage where an older fox sees her and the key, and opens the door in silent welcome.",
+      "subscenes": [
+        {
+          "index": 1,
+          "image_prompt": "Wide establishing shot. The small fox stands at the edge of the woods, looking across a snowy clearing at a cozy cottage with smoke curling from its chimney. Warm, inviting light from a lamp glows in its window. The scene is set during twilight, with the sky a soft mix of orange and deep blue. The fox is a small figure, her posture one of arrival.",
+          "video_prompt": "The camera slowly dollies forward, moving from behind the fox to a position just over her shoulder, sharing her point of view of the cottage. Smoke continues to curl from the chimney. The light in the cottage window flickers gently."
+        },
+        {
+          "index": 2,
+          "image_prompt": "Split shot. Right side: interior view through a window, showing an older fox with a green scarf, her kind face filled with sudden, quiet surprise. Left side: exterior view of the small fox looking towards the window, the glowing key on her chest clearly visible. The older fox's breath has fogged a small patch of the window pane. The moment is frozen in mutual recognition.",
+          "video_prompt": "The older fox's eyes widen slightly. She raises a paw slowly towards the window pane. Outside, the small fox takes a single, hesitant step forward. The camera slowly zooms in, tightening the frame on their faces to heighten the emotional connection."
+        },
+        {
+          "index": 3,
+          "image_prompt": "A welcoming low-angle shot from the small fox's perspective. The cottage door is open, revealing the older fox in the doorway, her face filled with warmth and kindness. A wave of golden light from the cottage interior spills out onto the snow, illuminating the small fox, who stands at the threshold looking up. The key around her neck gleams brightly, catching the interior light.",
+          "video_prompt": "The older fox gives a slow, gentle nod. She gestures slightly with her head, inviting the small fox inside. Warm air from the cottage causes steam to rise from the snow at the doorway. The small fox takes a definitive step across the threshold."
+        }
+      ]
+    },
+    {
+      "scene_index": 5,
+      "scene_summary": "Inside by the fire, the two foxes connect, and the little fox, now named Ember, is finally home and no longer alone.",
+      "subscenes": [
+        {
+          "index": 1,
+          "image_prompt": "A warm, intimate wide shot of a cottage interior. A fire crackles in a stone hearth. The small fox and the older fox sit together on a soft rug in front of the fire. The key lies on the rug between them. The scene is bathed in the warm, flickering orange light of the fire, which casts long, soft shadows. The older fox looks at the small one with a gentle, attentive expression. The small fox looks tired but safe.",
+          "video_prompt": "The firelight flickers, causing shadows on the wall to dance gently. Embers float up from the fire. The older fox's tail gives a slow, soft thump on the rug. The camera slowly pushes in on the two foxes."
+        },
+        {
+          "index": 2,
+          "image_prompt": "Medium close-up on the small fox, now called Ember. She uses a small paw to make a soft gesture, as if tracing her journey. Her expression is gentle and animated, her eyes wide as she communicates her story. The older fox is visible in soft focus in the foreground, her head tilted in a listening posture, her eyes full of understanding. The firelight highlights the expressions on both their faces.",
+          "video_prompt": "Ember's paw makes another small, descriptive gesture. She looks from her paw to the older fox's eyes. The older fox gives a slow, understanding blink and a gentle nod. The firelight catches a glint in Ember's eye."
+        },
+        {
+          "index": 3,
+          "image_prompt": "A final, peaceful shot from outside, looking through the cottage window. Inside, the two foxes are curled up closely together on the rug, asleep in the warm glow of the dying fire. The older fox's body shields Ember protectively. Outside, soft, heavy snowflakes are falling. The scene is silent, warm, and full of peace. The cottage is a beacon of warmth in the cold night.",
+          "video_prompt": "Snowflakes drift down slowly past the window pane. The firelight inside flickers very softly, casting a gentle, rhythmic glow. Ember's side rises and falls with a slow, deep breath. The camera slowly pulls back from the window, leaving the cottage as a small, warm point of light in the vast, snowy landscape."
+        }
+      ]
+    }
+  ]
+}
