@@ -4,6 +4,16 @@ import os
 
 
 
+def _has_audio_stream(filepath):
+    """Check if a media file contains an audio stream."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-select_streams", "a",
+         "-show_entries", "stream=index", "-of", "csv=p=0", filepath],
+        capture_output=True, text=True,
+    )
+    return bool(result.stdout.strip())
+
+
 def merge(VIDEO_FILE, AUDIO_FILE, OUTPUT_FILE, MODE):
     if not os.path.isfile(VIDEO_FILE):
         print(f"Error: Video file not found: {VIDEO_FILE}")
@@ -11,6 +21,11 @@ def merge(VIDEO_FILE, AUDIO_FILE, OUTPUT_FILE, MODE):
     if not os.path.isfile(AUDIO_FILE):
         print(f"Error: Audio file not found: {AUDIO_FILE}")
         return
+
+    # mix requires video to have audio — fall back to replace if it doesn't
+    if MODE == "mix" and not _has_audio_stream(VIDEO_FILE):
+        print(f"Video has no audio stream, falling back to replace mode")
+        MODE = "replace"
 
     print(f"Video : {VIDEO_FILE}")
     print(f"Audio : {AUDIO_FILE}")
