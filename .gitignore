@@ -13,6 +13,7 @@ __pycache__/
 *$py.class
 sessions/
 *hero/
+*.mp4
 
 # C extensions
 *.so
