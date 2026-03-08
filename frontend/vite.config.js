@@ -8,12 +8,12 @@ export default defineConfig({
     proxy: {
       // Forward /api/* requests to the FastAPI backend
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://backend:8000',
         changeOrigin: true,
       },
       // Forward all WebSocket connections (progress + conversation)
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: 'ws://backend:8000',
         ws: true,
         changeOrigin: true,
       },

@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.backend
+    env_file: .env
+    volumes:
+      # Mount Google service account key (read-only)
+      - ./key.json:/app/key.json:ro
+      # Persist story sessions across container restarts
+      - sessions:/app/sessions
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  sessions:
