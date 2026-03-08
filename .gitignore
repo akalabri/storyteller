@@ -11,6 +11,8 @@ scripts/output_final/
 __pycache__/
 *.py[codz]
 *$py.class
+sessions/
+*hero/
 
 # C extensions
 *.so
