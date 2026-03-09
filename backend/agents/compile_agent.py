@@ -4,10 +4,13 @@ background music into the final story video using ffmpeg (via the src utilities)
 
 Pipeline per scene
 ──────────────────
-  1. burn_subtitles_per_scene  — karaoke ASS captions burned into each sub-video
+  0. pre-pass  — for every scene, check if narration audio exceeds MAX_SCENE_AUDIO_S
+                 (23 s).  If so, speed it up with atempo and record the speed factor.
+  1. burn_subtitles_per_scene  — karaoke ASS captions burned into each sub-video,
+                                 with word timestamps scaled by the speed factor so
+                                 subtitles stay in sync with the faster audio.
   2. merge_videos              — concatenate subtitled sub-videos → merged scene
-  3. speed-up audio            — if narration > total video length (N × 8 s), use
-                                 atempo to compress it so it fits
+  3. (audio already processed) — sped-up (or original) audio from the pre-pass
   4. merge_audio               — mix narration onto merged scene video
 
 Final steps
@@ -46,6 +49,12 @@ logger = logging.getLogger(__name__)
 # Duration of each sub-video clip (seconds) — matches VEO_DURATION_SECONDS
 SUB_VIDEO_DURATION_S: float = 8.0
 
+# Hard cap for narration audio per scene (seconds).
+# If the narration is longer than this, it is sped up to fit.
+# Set slightly below the theoretical maximum (N × 8 s) so there is a small
+# buffer and the audio never overruns the last frame.
+MAX_SCENE_AUDIO_S: float = 23.0
+
 
 # ---------------------------------------------------------------------------
 # Audio helpers
@@ -53,24 +62,28 @@ SUB_VIDEO_DURATION_S: float = 8.0
 
 def _speed_up_audio_if_needed(
     audio_path: str,
-    video_duration: float,
+    max_duration: float,
     output_path: str,
-) -> str:
+) -> tuple[str, float]:
     """
-    If the audio is longer than *video_duration*, speed it up with ffmpeg
-    ``atempo`` so it fits.  Returns the path to the (possibly adjusted) audio.
+    If the audio is longer than *max_duration*, speed it up with ffmpeg
+    ``atempo`` so it fits within that limit.
+
+    Returns a ``(path, speed_factor)`` tuple where *path* is the (possibly
+    new) audio file and *speed_factor* is the ratio ``original / target``
+    (1.0 when no speed-up was needed).
 
     ``atempo`` only accepts values in [0.5, 2.0], so for speed factors above
     2× the filter is chained (e.g. 3× → atempo=2.0,atempo=1.5).
     """
     audio_duration = get_media_duration(audio_path)
-    if audio_duration <= video_duration:
-        return audio_path
+    if audio_duration <= max_duration:
+        return audio_path, 1.0
 
-    speed_factor = audio_duration / video_duration
+    speed_factor = audio_duration / max_duration
     logger.info(
-        "Audio (%.2fs) longer than video (%.2fs); speeding up ×%.3f → %s",
-        audio_duration, video_duration, speed_factor, output_path,
+        "Audio (%.2fs) exceeds cap (%.2fs); speeding up ×%.4f → %s",
+        audio_duration, max_duration, speed_factor, output_path,
     )
 
     filters: list[str] = []
@@ -91,8 +104,8 @@ def _speed_up_audio_if_needed(
         logger.warning(
             "Audio speed-up failed (%s) — using original audio.", result.stderr[:200]
         )
-        return audio_path
-    return output_path
+        return audio_path, 1.0
+    return output_path, speed_factor
 
 
 # ---------------------------------------------------------------------------
@@ -173,26 +186,60 @@ def _compile_sync(
     for d in (subtitled_dir, merged_dir, final_scenes_dir):
         d.mkdir(parents=True, exist_ok=True)
 
+    # ── Step 1 (pre-pass): discover scenes and compute audio speed factors ───
+    # We must know the speed factor before burning subtitles so that word
+    # timestamps can be compressed to match the (possibly faster) audio.
+    raw_sub_files = glob.glob(str(videos_dir / "scene_*_sub_*.mp4"))
+    scene_nums = sorted({
+        int(re.search(r"scene_(\d+)", f).group(1))
+        for f in raw_sub_files
+    })
+
+    if not scene_nums:
+        raise RuntimeError(
+            "No sub-videos found in videos directory. "
+            "Ensure scene videos are fully generated."
+        )
+
+    # Map scene_num → speed_factor (1.0 means no change)
+    scene_speed_factors: dict[int, float] = {}
+    # Map scene_num → path of (possibly sped-up) audio
+    scene_audio_paths: dict[int, str] = {}
+    # Map scene_num → sorted list of raw sub-video paths
+    scene_sub_videos: dict[int, list[str]] = {}
+
+    for scene_num in scene_nums:
+        subs = sorted(
+            glob.glob(str(videos_dir / f"scene_{scene_num}_sub_*.mp4")),
+            key=lambda f: int(re.search(r"sub_(\d+)", f).group(1)),
+        )
+        scene_sub_videos[scene_num] = subs
+
+        audio_file = str(narration_dir / f"scene_{scene_num}.mp3")
+        if not os.path.isfile(audio_file):
+            logger.warning(
+                "Scene %d: narration audio not found (%s) — will skip.", scene_num, audio_file
+            )
+            scene_speed_factors[scene_num] = 1.0
+            scene_audio_paths[scene_num] = audio_file
+            continue
+
+        sped_audio_path = str(tmp_root / f"scene_{scene_num}_narration.mp3")
+        actual_audio, speed_factor = _speed_up_audio_if_needed(
+            audio_file, MAX_SCENE_AUDIO_S, sped_audio_path
+        )
+        scene_speed_factors[scene_num] = speed_factor
+        scene_audio_paths[scene_num] = actual_audio
+
     # ── Step 1: burn karaoke subtitles into each sub-video ──────────────────
+    # Pass speed factors so timestamps are scaled to match sped-up audio.
     logger.info("Compile step 1: burning karaoke subtitles…")
     burn_subtitles_per_scene(
         str(videos_dir),
         str(narration_dir),
         str(subtitled_dir),
+        speed_factors=scene_speed_factors,
     )
-
-    # Discover which scene numbers were processed
-    sub_files = glob.glob(str(subtitled_dir / "scene_*_sub_*.mp4"))
-    scene_nums = sorted({
-        int(re.search(r"scene_(\d+)", f).group(1))
-        for f in sub_files
-    })
-
-    if not scene_nums:
-        raise RuntimeError(
-            "No subtitled sub-videos found after subtitle step. "
-            "Ensure videos and narration are fully populated."
-        )
 
     final_scene_paths: list[str] = []
 
@@ -211,18 +258,13 @@ def _compile_sync(
         merged_video = str(merged_dir / f"scene_{scene_num}.mp4")
         merge_videos(subs, merged_video)
 
-        # ── Step 3: speed-up narration audio if it overflows ────────────────
-        audio_file = str(narration_dir / f"scene_{scene_num}.mp3")
-        if not os.path.isfile(audio_file):
+        # ── Step 3: audio was already processed in the pre-pass ─────────────
+        actual_audio = scene_audio_paths.get(scene_num, "")
+        if not os.path.isfile(actual_audio):
             logger.warning(
-                "Scene %d: narration audio not found (%s) — skipping.", scene_num, audio_file
+                "Scene %d: narration audio not found (%s) — skipping.", scene_num, actual_audio
             )
             continue
-
-        # Total video length = number of sub-clips × fixed sub-clip duration
-        video_duration = len(subs) * SUB_VIDEO_DURATION_S
-        sped_audio_path = str(tmp_root / f"scene_{scene_num}_narration.mp3")
-        actual_audio = _speed_up_audio_if_needed(audio_file, video_duration, sped_audio_path)
 
         # ── Step 4: mix narration audio into merged scene video ──────────────
         final_scene_video = str(final_scenes_dir / f"scene_{scene_num}.mp4")
