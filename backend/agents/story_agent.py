@@ -2,9 +2,8 @@
 Story agent — converts a raw conversation transcript into a structured
 StoryBreakdown (scenes, character prompts, special instructions).
 
-Uses Gemini (default: 2.5 Flash for speed) via Vertex AI with JSON schema
-enforcement. Runs the blocking call in a thread-pool executor with a
-configurable timeout so the async orchestrator does not hang.
+Uses Gemini 3.1 Pro (Vertex AI, global endpoint) with JSON schema enforcement.
+Runs the blocking call in a thread-pool executor with a configurable timeout.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from google.genai import types
 
 from backend.config import (
     GEMINI_STORY_MODEL,
-    GOOGLE_CLOUD_LOCATION,
+    GEMINI_TEXT_LOCATION,
     GOOGLE_CLOUD_PROJECT,
     STORY_BREAKDOWN_TIMEOUT_S,
 )
@@ -68,7 +67,26 @@ Be specific — avoid vague adjectives like "nice", "normal", or "beautiful". \
 Do NOT include the character's name anywhere in the description — the name is stored separately.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-3. special_instructions
+3. prop_descriptions
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Identify every significant prop, object, named location, or non-character entity (animals, \
+vehicles, buildings) that appears in more than one scene. For each, write a precise visual \
+description that will be inserted verbatim into image prompts to guarantee it looks identical \
+every time it is rendered.
+
+The description MUST include:
+• Shape and size (e.g. small round bell the size of a fist, squat two-storey stone cottage)
+• Colour(s) — specific hues, not vague terms (e.g. warm polished brass, not just "gold")
+• Material and surface texture (worn leather strap, rough-hewn timber, glazed ceramic)
+• Any distinctive markings, engravings, damage, or unique features
+• How light interacts with it if relevant (high-gloss sheen, matte finish, translucent amber)
+
+Be precise enough that an AI image model generates it identically in every scene. \
+Do NOT include character names in prop descriptions. \
+Omit props that only appear in a single scene.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. special_instructions
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Extract any instructions relevant to visual production: graphic or art style (e.g. watercolour, \
 3-D render, flat illustration), story tone, cultural or language requirements, target audience \
@@ -89,7 +107,7 @@ def _generate_sync(conversation_text: str) -> StoryBreakdown:
     client = genai.Client(
         vertexai=True,
         project=GOOGLE_CLOUD_PROJECT,
-        location=GOOGLE_CLOUD_LOCATION,
+        location=GEMINI_TEXT_LOCATION,
     )
 
     response = client.models.generate_content(
@@ -135,8 +153,9 @@ async def generate_story_breakdown(conversation_transcript: str) -> StoryBreakdo
             "Set STORY_BREAKDOWN_TIMEOUT_S in .env to increase, or check your network/Vertex AI."
         ) from None
     logger.info(
-        "Story breakdown ready: %d scenes, %d characters.",
+        "Story breakdown ready: %d scenes, %d characters, %d props.",
         len(breakdown.story),
         len(breakdown.characters_prompts),
+        len(breakdown.prop_descriptions),
     )
     return breakdown

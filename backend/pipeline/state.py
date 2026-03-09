@@ -33,12 +33,33 @@ class CharacterPrompt(BaseModel):
     )
 
 
+class PropDescription(BaseModel):
+    name: str = Field(
+        description="Short canonical label for the prop, object, or location (e.g. 'golden bell', 'village square', 'baker's cottage')"
+    )
+    description: str = Field(
+        description=(
+            "Precise visual description for use verbatim in image prompts. "
+            "Covers shape, size, colour, material, texture, and all distinctive features "
+            "so the object looks identical every time it is rendered."
+        )
+    )
+
+
 class StoryBreakdown(BaseModel):
     story: list[str] = Field(
         description="The story split into 3–5 scenes as narrative prose."
     )
     characters_prompts: list[CharacterPrompt] = Field(
         description="One entry per main character with a detailed visual prompt."
+    )
+    prop_descriptions: list[PropDescription] = Field(
+        default_factory=list,
+        description=(
+            "One entry per significant recurring prop, object, named location, or "
+            "non-character entity (animals, crowds) that appears in more than one scene. "
+            "Used to keep visual descriptions consistent across all scene images."
+        ),
     )
     special_instructions: str = Field(
         default="",
@@ -115,7 +136,6 @@ class StoryState(BaseModel):
     # --- Generated file paths (relative to session output dir) ---
     # key: scene index (int as str e.g. "1")
     narration_paths: dict[str, str] = Field(default_factory=dict)
-    narration_timestamps: dict[str, Any] = Field(default_factory=dict)
 
     # key: character slug e.g. "Ember"
     character_image_paths: dict[str, str] = Field(default_factory=dict)

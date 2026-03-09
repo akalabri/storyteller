@@ -1,145 +1,171 @@
 """
 Compile agent — assembles sub-scene MP4s, narration MP3s, and optional
-background music into the final story video using MoviePy + PIL.
+background music into the final story video using ffmpeg (via the src utilities).
 
-The compilation is CPU-bound and blocking; it runs in the thread-pool
-executor so the async orchestrator remains responsive.
+Pipeline per scene
+──────────────────
+  0. pre-pass  — for every scene, check if narration audio exceeds MAX_SCENE_AUDIO_S
+                 (23 s).  If so, speed it up with atempo and record the speed factor.
+  1. burn_subtitles_per_scene  — karaoke ASS captions burned into each sub-video,
+                                 with word timestamps scaled by the speed factor so
+                                 subtitles stay in sync with the faster audio.
+  2. merge_videos              — concatenate subtitled sub-videos → merged scene
+  3. (audio already processed) — sped-up (or original) audio from the pre-pass
+  4. merge_audio               — mix narration onto merged scene video
+
+Final steps
+───────────
+  5. merge_videos              — concatenate all final scene videos → combined
+  6. background music          — boost narration volume and optionally blend BG
+                                 music via ffmpeg amix + volume filters
+
+The compilation is CPU/IO-bound; it runs in the thread-pool executor so the
+async orchestrator remains responsive.
 """
 
 from __future__ import annotations
 
 import asyncio
+import glob
 import logging
-import textwrap
+import os
+import re
+import shutil
+import subprocess
 from pathlib import Path
-from typing import Optional
-
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-
-if not hasattr(Image, "ANTIALIAS"):
-    Image.ANTIALIAS = Image.LANCZOS  # type: ignore[attr-defined]
-
-from moviepy.editor import (
-    AudioFileClip,
-    CompositeAudioClip,
-    VideoClip,
-    VideoFileClip,
-    concatenate_videoclips,
-)
 
 from backend.config import (
     BACKGROUND_MUSIC_PATH,
     MUSIC_VOLUME,
     NARRATION_VOLUME,
-    SUBTITLE_AREA_HEIGHT,
-    SUBTITLE_BG_COLOR,
-    SUBTITLE_COLOR,
-    SUBTITLE_FONT_PATH,
-    SUBTITLE_FONTSIZE,
-    SUBTITLE_PADDING_X,
-    VIDEO_FPS,
 )
 from backend.pipeline.state import StoryBreakdown, StoryVisualPlan
+from backend.src.audio_to_video import merge as merge_audio
+from backend.src.merge_subtitle import burn_subtitles_per_scene, get_media_duration
+from backend.src.merge_videos import merge_videos
 
 logger = logging.getLogger(__name__)
 
+# Duration of each sub-video clip (seconds) — matches VEO_DURATION_SECONDS
+SUB_VIDEO_DURATION_S: float = 8.0
+
+# Hard cap for narration audio per scene (seconds).
+# If the narration is longer than this, it is sped up to fit.
+# Set slightly below the theoretical maximum (N × 8 s) so there is a small
+# buffer and the audio never overruns the last frame.
+MAX_SCENE_AUDIO_S: float = 23.0
+
 
 # ---------------------------------------------------------------------------
-# Subtitle helpers (ported from 8_compile_video.py)
+# Audio helpers
 # ---------------------------------------------------------------------------
 
-def _split_into_three(text: str) -> tuple[str, str, str]:
-    words = text.split()
-    n = len(words)
-    cut1, cut2 = n // 3, 2 * n // 3
-    return (
-        " ".join(words[:cut1]),
-        " ".join(words[cut1:cut2]),
-        " ".join(words[cut2:]),
+def _speed_up_audio_if_needed(
+    audio_path: str,
+    max_duration: float,
+    output_path: str,
+) -> tuple[str, float]:
+    """
+    If the audio is longer than *max_duration*, speed it up with ffmpeg
+    ``atempo`` so it fits within that limit.
+
+    Returns a ``(path, speed_factor)`` tuple where *path* is the (possibly
+    new) audio file and *speed_factor* is the ratio ``original / target``
+    (1.0 when no speed-up was needed).
+
+    ``atempo`` only accepts values in [0.5, 2.0], so for speed factors above
+    2× the filter is chained (e.g. 3× → atempo=2.0,atempo=1.5).
+    """
+    audio_duration = get_media_duration(audio_path)
+    if audio_duration <= max_duration:
+        return audio_path, 1.0
+
+    speed_factor = audio_duration / max_duration
+    logger.info(
+        "Audio (%.2fs) exceeds cap (%.2fs); speeding up ×%.4f → %s",
+        audio_duration, max_duration, speed_factor, output_path,
     )
 
+    filters: list[str] = []
+    remaining = speed_factor
+    while remaining > 2.0:
+        filters.append("atempo=2.0")
+        remaining /= 2.0
+    filters.append(f"atempo={remaining:.6f}")
 
-def _load_pil_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    if SUBTITLE_FONT_PATH and Path(SUBTITLE_FONT_PATH).exists():
-        return ImageFont.truetype(str(SUBTITLE_FONT_PATH), size)
-    for name in ("arial.ttf", "Arial.ttf", "DejaVuSans.ttf"):
-        try:
-            return ImageFont.truetype(name, size)
-        except OSError:
-            pass
-    logger.warning("No TrueType font found — falling back to PIL default font.")
-    return ImageFont.load_default()
-
-
-def _render_subtitle_strip(text: str, width: int) -> np.ndarray:
-    font = _load_pil_font(SUBTITLE_FONTSIZE)
-    avg_char_width = SUBTITLE_FONTSIZE * 0.55
-    chars_per_line = max(1, int((width - SUBTITLE_PADDING_X * 2) / avg_char_width))
-    wrapped_lines = textwrap.wrap(text, width=chars_per_line) or [""]
-
-    img = Image.new("RGB", (width, SUBTITLE_AREA_HEIGHT), color=SUBTITLE_BG_COLOR)
-    draw = ImageDraw.Draw(img)
-    line_height = SUBTITLE_FONTSIZE + 8
-    total_text_h = len(wrapped_lines) * line_height
-    y = (SUBTITLE_AREA_HEIGHT - total_text_h) // 2
-
-    for line in wrapped_lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        text_w = bbox[2] - bbox[0]
-        x = (width - text_w) // 2
-        draw.text((x, y), line, fill=SUBTITLE_COLOR, font=font)
-        y += line_height
-
-    return np.array(img)
-
-
-def _add_subtitle_to_clip(video_clip: VideoFileClip, subtitle_text: str) -> VideoClip:
-    orig_w, _ = video_clip.size
-    strip = _render_subtitle_strip(subtitle_text.strip(), orig_w)
-
-    def make_frame(t: float) -> np.ndarray:
-        return np.vstack([video_clip.get_frame(t), strip])
-
-    new_clip = VideoClip(make_frame, duration=video_clip.duration)
-    new_clip.fps = getattr(video_clip, "fps", None) or VIDEO_FPS
-    return new_clip
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", audio_path,
+        "-filter:a", ",".join(filters),
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.warning(
+            "Audio speed-up failed (%s) — using original audio.", result.stderr[:200]
+        )
+        return audio_path, 1.0
+    return output_path, speed_factor
 
 
 # ---------------------------------------------------------------------------
-# Scene clip builder
+# Background music / volume helpers
 # ---------------------------------------------------------------------------
 
-def _build_scene_clip(
-    scene_idx: int,
-    subscenes: list[dict],
-    scene_text: str,
-    narration_path: Path,
-    videos_dir: Path,
-) -> tuple[Optional[VideoClip], AudioFileClip]:
-    subtitle_parts = _split_into_three(scene_text)
-    narration = AudioFileClip(str(narration_path))
+def _apply_volume_and_bg_music(
+    video_path: str,
+    output_path: str,
+    narration_volume: float,
+    bg_music_path: str | None,
+    music_volume: float,
+) -> None:
+    """
+    Apply narration volume boost and optionally blend looping background music.
 
-    sub_clips = []
-    for sub in subscenes:
-        sub_idx = sub["index"]
-        video_path = videos_dir / f"scene_{scene_idx}_sub_{sub_idx}.mp4"
-        if not video_path.exists():
-            logger.warning("Missing video: %s — skipping sub-scene.", video_path)
-            continue
-        raw_clip = VideoFileClip(str(video_path)).without_audio()
-        sub_clips.append(_add_subtitle_to_clip(raw_clip, subtitle_parts[sub_idx - 1]))
+    Uses ``-stream_loop -1`` so a short music file repeats for the full
+    duration of the video.  ``amix duration=first`` then trims the mix to
+    the video length.
+    """
+    if bg_music_path and os.path.isfile(bg_music_path):
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-stream_loop", "-1",
+            "-i", bg_music_path,
+            "-filter_complex",
+            (
+                f"[0:a]volume={narration_volume}[a_narr];"
+                f"[1:a]volume={music_volume}[a_music];"
+                f"[a_narr][a_music]amix=inputs=2:duration=first:normalize=0[aout]"
+            ),
+            "-map", "0:v",
+            "-map", "[aout]",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            output_path,
+        ]
+    else:
+        # No BG music — just boost the narration volume
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-filter:a", f"volume={narration_volume}",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            output_path,
+        ]
 
-    if not sub_clips:
-        return None, narration
-
-    scene_video = concatenate_videoclips(sub_clips, method="compose")
-    scene_video = scene_video.set_audio(narration)
-    return scene_video, narration
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.warning(
+            "Volume/music mixing failed (%s) — copying pre-mix video to output.",
+            result.stderr[:200],
+        )
+        shutil.copy2(video_path, output_path)
 
 
 # ---------------------------------------------------------------------------
-# Main compilation function (sync — runs inside executor)
+# Main compilation function (sync — runs inside thread-pool executor)
 # ---------------------------------------------------------------------------
 
 def _compile_sync(
@@ -151,72 +177,136 @@ def _compile_sync(
 ) -> str:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    scene_texts = breakdown.story
-    scenes_data = visual_plan.scenes
+    # Intermediate directories live next to the final output
+    tmp_root = output_path.parent / "compile_tmp"
+    subtitled_dir = tmp_root / "subtitled"
+    merged_dir = tmp_root / "merged"
+    final_scenes_dir = tmp_root / "final_scenes"
 
-    scene_clips: list[VideoClip] = []
-    all_narration_clips: list[AudioFileClip] = []
+    for d in (subtitled_dir, merged_dir, final_scenes_dir):
+        d.mkdir(parents=True, exist_ok=True)
 
-    for scene in scenes_data:
-        scene_idx = scene.scene_index
-        narration_path = narration_dir / f"scene_{scene_idx}.mp3"
+    # ── Step 1 (pre-pass): discover scenes and compute audio speed factors ───
+    # We must know the speed factor before burning subtitles so that word
+    # timestamps can be compressed to match the (possibly faster) audio.
+    raw_sub_files = glob.glob(str(videos_dir / "scene_*_sub_*.mp4"))
+    scene_nums = sorted({
+        int(re.search(r"scene_(\d+)", f).group(1))
+        for f in raw_sub_files
+    })
 
-        if not narration_path.exists():
-            logger.warning("Missing narration for scene %d — skipping.", scene_idx)
+    if not scene_nums:
+        raise RuntimeError(
+            "No sub-videos found in videos directory. "
+            "Ensure scene videos are fully generated."
+        )
+
+    # Map scene_num → speed_factor (1.0 means no change)
+    scene_speed_factors: dict[int, float] = {}
+    # Map scene_num → path of (possibly sped-up) audio
+    scene_audio_paths: dict[int, str] = {}
+    # Map scene_num → sorted list of raw sub-video paths
+    scene_sub_videos: dict[int, list[str]] = {}
+
+    for scene_num in scene_nums:
+        subs = sorted(
+            glob.glob(str(videos_dir / f"scene_{scene_num}_sub_*.mp4")),
+            key=lambda f: int(re.search(r"sub_(\d+)", f).group(1)),
+        )
+        scene_sub_videos[scene_num] = subs
+
+        audio_file = str(narration_dir / f"scene_{scene_num}.mp3")
+        if not os.path.isfile(audio_file):
+            logger.warning(
+                "Scene %d: narration audio not found (%s) — will skip.", scene_num, audio_file
+            )
+            scene_speed_factors[scene_num] = 1.0
+            scene_audio_paths[scene_num] = audio_file
             continue
 
-        text = scene_texts[scene_idx - 1] if scene_idx - 1 < len(scene_texts) else ""
-        subscenes_data = [s.model_dump() for s in scene.subscenes]
-
-        logger.info("Compiling scene %d…", scene_idx)
-        clip, narration_clip = _build_scene_clip(
-            scene_idx, subscenes_data, text, narration_path, videos_dir
+        sped_audio_path = str(tmp_root / f"scene_{scene_num}_narration.mp3")
+        actual_audio, speed_factor = _speed_up_audio_if_needed(
+            audio_file, MAX_SCENE_AUDIO_S, sped_audio_path
         )
-        all_narration_clips.append(narration_clip)
-        if clip is not None:
-            scene_clips.append(clip)
+        scene_speed_factors[scene_num] = speed_factor
+        scene_audio_paths[scene_num] = actual_audio
 
-    if not scene_clips:
-        raise RuntimeError(
-            "No clips produced. Ensure output_videos/ and output_narration/ are populated."
-        )
-
-    logger.info("Concatenating %d scene clip(s)…", len(scene_clips))
-    final_video = concatenate_videoclips(scene_clips, method="compose")
-
-    # Optional background music
-    if BACKGROUND_MUSIC_PATH.exists():
-        bg_music = AudioFileClip(str(BACKGROUND_MUSIC_PATH)).volumex(MUSIC_VOLUME)
-        if bg_music.duration < final_video.duration:
-            bg_music = bg_music.loop(duration=final_video.duration)
-        else:
-            bg_music = bg_music.subclip(0, final_video.duration)
-        narration_combined = final_video.audio.volumex(NARRATION_VOLUME)
-        final_video = final_video.set_audio(CompositeAudioClip([narration_combined, bg_music]))
-    else:
-        final_video = final_video.set_audio(final_video.audio.volumex(NARRATION_VOLUME))
-
-    logger.info("Writing final video to %s…", output_path)
-    final_video.write_videofile(
-        str(output_path),
-        fps=VIDEO_FPS,
-        codec="libx264",
-        audio_codec="aac",
-        remove_temp=True,
-        logger=None,
+    # ── Step 1: burn karaoke subtitles into each sub-video ──────────────────
+    # Pass speed factors so timestamps are scaled to match sped-up audio.
+    logger.info("Compile step 1: burning karaoke subtitles…")
+    burn_subtitles_per_scene(
+        str(videos_dir),
+        str(narration_dir),
+        str(subtitled_dir),
+        speed_factors=scene_speed_factors,
     )
 
-    final_video.close()
-    for c in scene_clips:
-        c.close()
-    for n in all_narration_clips:
-        n.close()
+    final_scene_paths: list[str] = []
 
+    for scene_num in scene_nums:
+        logger.info("Compile scene %d…", scene_num)
+
+        # ── Step 2: merge this scene's subtitled sub-videos ─────────────────
+        subs = sorted(
+            glob.glob(str(subtitled_dir / f"scene_{scene_num}_sub_*.mp4")),
+            key=lambda f: int(re.search(r"sub_(\d+)", f).group(1)),
+        )
+        if not subs:
+            logger.warning("Scene %d: no subtitled sub-videos — skipping.", scene_num)
+            continue
+
+        merged_video = str(merged_dir / f"scene_{scene_num}.mp4")
+        merge_videos(subs, merged_video)
+
+        # ── Step 3: audio was already processed in the pre-pass ─────────────
+        actual_audio = scene_audio_paths.get(scene_num, "")
+        if not os.path.isfile(actual_audio):
+            logger.warning(
+                "Scene %d: narration audio not found (%s) — skipping.", scene_num, actual_audio
+            )
+            continue
+
+        # ── Step 4: mix narration audio into merged scene video ──────────────
+        final_scene_video = str(final_scenes_dir / f"scene_{scene_num}.mp4")
+        merge_audio(merged_video, actual_audio, final_scene_video, "mix")
+        final_scene_paths.append(final_scene_video)
+
+    if not final_scene_paths:
+        raise RuntimeError(
+            "No final scene videos were produced. "
+            "Ensure all scenes have both videos and narration audio."
+        )
+
+    # ── Step 5: merge all final scene videos into one combined video ─────────
+    logger.info("Compile step 5: merging %d scene(s) into combined video…", len(final_scene_paths))
+    pre_music_path = str(output_path.parent / "story_pre_music.mp4")
+    merge_videos(final_scene_paths, pre_music_path)
+
+    # ── Step 6: apply narration volume boost + optional background music ─────
+    bg_path = str(BACKGROUND_MUSIC_PATH) if BACKGROUND_MUSIC_PATH.exists() else None
+    if bg_path:
+        logger.info("Compile step 6: adding background music (%s)…", bg_path)
+    else:
+        logger.info("Compile step 6: no background music found — boosting narration volume only.")
+
+    _apply_volume_and_bg_music(
+        pre_music_path,
+        str(output_path),
+        narration_volume=NARRATION_VOLUME,
+        bg_music_path=bg_path,
+        music_volume=MUSIC_VOLUME,
+    )
+
+    # Clean up the temporary pre-music file
+    if os.path.isfile(pre_music_path):
+        os.remove(pre_music_path)
+
+    logger.info("Final video written to %s", output_path)
     return str(output_path)
 
 
 # ---------------------------------------------------------------------------
-# Public async function
+# Public async entry point
 # ---------------------------------------------------------------------------
 
 async def compile_video(
@@ -229,7 +319,7 @@ async def compile_video(
     """
     Compile the final story video.
 
-    Runs the blocking MoviePy pipeline in the thread-pool executor.
+    Runs the blocking ffmpeg pipeline in the thread-pool executor.
     Returns the path to the output MP4.
     """
     logger.info("Starting video compilation…")

@@ -138,6 +138,16 @@ def is_veo_internal_error(exc: Exception) -> bool:
 
 
 def is_veo_safety_error(exc: Exception) -> bool:
-    """Return True if the exception indicates a Veo safety block."""
+    """Return True if the exception indicates a Veo safety/content block (triggers FAL fallback)."""
     msg = str(exc).lower()
-    return any(kw in msg for kw in ("person/face", "safety", "blocked", "safety_block"))
+    return any(
+        kw in msg
+        for kw in (
+            "person/face",
+            "safety",
+            "blocked",
+            "safety_block",
+            "third-party",
+            "content providers",
+        )
+    )

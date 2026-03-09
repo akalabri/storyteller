@@ -2,7 +2,8 @@
 Scene prompt agent — generates the full StoryVisualPlan (image + video prompts
 for every sub-scene) from the story breakdown.
 
-Uses Gemini 2.5 Pro with JSON schema enforcement, dispatched to thread-pool.
+Uses Gemini 3.1 Pro (Vertex AI, global endpoint) with JSON schema enforcement,
+dispatched to thread-pool.
 """
 
 from __future__ import annotations
@@ -14,8 +15,8 @@ from google import genai
 from google.genai import types
 
 from backend.config import (
+    GEMINI_TEXT_LOCATION,
     GEMINI_TEXT_MODEL,
-    GOOGLE_CLOUD_LOCATION,
     GOOGLE_CLOUD_PROJECT,
 )
 from backend.pipeline.state import StoryBreakdown, StoryVisualPlan
@@ -30,25 +31,74 @@ SYSTEM_PROMPT = """You are a senior production director crafting the visual shoo
 
 You will receive:
 - The story broken into scenes (narrative prose) — read each one carefully and deeply; every specific detail in the prose is your visual source material
-- Character descriptions — provided only so you know which characters appear; reference images will be passed directly to the image model, so NEVER describe how characters look
+- Character descriptions — these are the MAIN characters with reference images; reference images will be passed directly to the image model, so NEVER describe how these main characters look. Any character NOT listed here has no reference image and MUST be described in full detail every time they appear (see SECONDARY CHARACTER CONSISTENCY section below)
 - Special instructions (art style, tone, target audience)
 
-Your task is to produce a detailed shot-by-shot visual plan. For each story scene, create exactly 3 consecutive 
-sub-scenes that form a clear beginning → middle → end arc for that scene.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 0 — DEFINE THE VISUAL STYLE SIGNATURE (do this first, before writing any prompts)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Read the special instructions carefully. If an art style is mentioned (e.g. "anime", "watercolour", 
+"Studio Ghibli", "flat vector", "oil painting", "3D Pixar-style"), extract it exactly.
+If no style is mentioned, choose one style that best fits the story's tone and target audience 
+(e.g. soft watercolour illustration for a gentle bedtime story; bold anime cel-shading for an 
+adventurous tale; warm 2D hand-drawn for a cosy family story).
 
-NARRATION FIDELITY — this is critical:
-Each sub-scene must be visually grounded in the specific narrative beat from the story prose.
-- Sub-scene 1 (beginning): the setup or arrival — where are we, what is the character about to do or discover?
-- Sub-scene 2 (middle): the action or turning point — the key moment of doing, reacting, or feeling
-- Sub-scene 3 (end): the resolution or emotional landing — the consequence, the realisation, the quiet after
+Write this style as a short, precise style tag — e.g.:
+  "anime cel-shaded, vibrant saturated colours, clean ink outlines, hand-painted backgrounds"
+  "soft watercolour illustration, muted pastel palette, loose ink linework, dreamy vignettes"
+  "Studio Ghibli-inspired 2D animation, lush painterly backgrounds, warm earthy palette"
 
-Pull concrete nouns, verbs, and sensory details directly from the prose (a buried key, cold bark, glowing symbols, 
-patches of green through white). Do not invent details that contradict the story text.
+You MUST append this exact style tag verbatim to the end of EVERY image_prompt in the plan.
+No exceptions — every single image_prompt must end with the style tag so that all frames 
+look like they belong to the same film.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CINEMATIC CONTINUITY — treat all scenes as one film
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The output is a movie, not a collection of separate illustrations. Across all scenes:
+- Keep the world consistent: the same forest, cottage, river, or town — recurring landmarks 
+  and environmental details must match from scene to scene.
+- Maintain a coherent colour palette throughout: if the opening is cool blue moonlight, 
+  the lighting logic must evolve naturally (dawn warms to golden, dusk cools again) rather 
+  than jumping to random palettes.
+- Camera language should build: use wider establishing shots early, tighten into close-ups 
+  at emotional peaks, then pull back for resolution — creating a natural visual rhythm.
+- Atmospheric details introduced in one scene (snow on pine boughs, a glowing lantern, 
+  the colour of the sky) should carry through or resolve deliberately in later scenes.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NARRATION FIDELITY — this is critical
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Your task is to produce a detailed shot-by-shot visual plan. For each story scene, you must:
+
+STEP 1 — SPLIT THE SCENE TEXT INTO THREE SEQUENTIAL CHUNKS
+Read the scene prose carefully. Divide it into three roughly equal, consecutive text segments — 
+Chunk A (first ~third), Chunk B (middle ~third), Chunk C (final ~third).
+The split must follow the natural flow of the text: Chunk A covers the opening sentences, 
+Chunk B covers the middle sentences, Chunk C covers the closing sentences.
+Do NOT rearrange, skip, or summarise — every part of the prose must fall into exactly one chunk.
+
+STEP 2 — BUILD EACH SUB-SCENE FROM ITS CHUNK
+Each sub-scene is a visual representation of its corresponding text chunk and ONLY that chunk:
+- Sub-scene 1 → Chunk A: visualise what is happening in the opening sentences
+- Sub-scene 2 → Chunk B: visualise what is happening in the middle sentences
+- Sub-scene 3 → Chunk C: visualise what is happening in the closing sentences
+
+The visual must match the narration that will be read aloud over it. A viewer watching the 
+animation while listening to the narration must feel that the image on screen perfectly 
+illustrates the words being spoken at that moment.
+
+Pull concrete nouns, verbs, and sensory details directly from the prose chunk for that sub-scene 
+(a buried key, cold bark, glowing symbols, patches of green through white). 
+Do not invent details that contradict the story text, and do not borrow details from a different chunk.
 
 For each sub-scene produce two prompts:
 
 1. image_prompt — Write this as a film director briefing a cinematographer on a single frame.
-   The character reference images are already provided to the image model — do NOT describe how characters look.
+   Reference images are provided for the MAIN characters listed in CHARACTER DESCRIPTIONS —
+   do NOT describe their appearance; the model already knows how they look.
+   For any secondary character (anyone NOT listed in CHARACTER DESCRIPTIONS), embed their 
+   full canonical appearance description as defined in STEP A above — every single time they appear.
    Focus entirely on:
    - What the character(s) are DOING and how they are physically engaging with their environment
      (a paw brushing snow off a buried key, a fox pressing her nose to cold bark, two foxes sitting close by a fire)
@@ -63,7 +113,7 @@ For each sub-scene produce two prompts:
    - Lighting: direction, quality, color temperature, and specific practical sources 
      (cold blue moonlight through pine canopy, the amber glow of a key catching light, 
      warm orange firelight from a cottage hearth)
-   - Art style and overall mood, consistent with the special instructions
+   - END the prompt with the style tag defined in Step 0 — verbatim, every time.
    Pull specific imagery, actions, and sensory details directly from the story prose for that scene.
 
 2. video_prompt — Describe only what moves or changes to animate the still into a short clip.
@@ -72,7 +122,57 @@ For each sub-scene produce two prompts:
    (snowflakes drifting, embers floating up, firelight flickering, a scarf shifting in a breeze).
    Do NOT re-describe the static scene. Characters must never speak or mouth words — no talking, no lip movement, no dialogue gestures. Keep motion gentle and wonder-filled.
 
-Apply the special instructions (art style, tone, audience) consistently across all prompts.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PROP & LOCATION CONSISTENCY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+You will receive a PROP DESCRIPTIONS block alongside the character descriptions.
+Each entry is a canonical visual description for a recurring prop, object, or location.
+
+Rules:
+- Whenever a prop or location from the list appears in a sub-scene, copy its canonical 
+  description verbatim into the image_prompt. Do not paraphrase or summarise it.
+- If a prop description says "small round brass bell with a polished surface and a short 
+  iron clapper", every image_prompt that includes the bell must contain exactly that phrase.
+- Apply the same rule to named locations (the village square, the hayloft, the bakery alley):
+  include the canonical location description once at the start of the relevant image_prompt.
+- If a prop or location only appears in one sub-scene, still include its description to 
+  ensure consistent rendering.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECONDARY CHARACTER CONSISTENCY — critical
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The CHARACTER DESCRIPTIONS block lists only the MAIN characters — those for whom reference 
+images will be passed directly to the image model. For those characters, NEVER describe 
+their appearance; the model already has their visual reference.
+
+However, any other person, creature, or figure that appears in the story but is NOT listed 
+in the CHARACTER DESCRIPTIONS block does NOT have a reference image. For these secondary 
+characters (background villagers, minor figures, crowds, animals, etc.) you MUST:
+
+STEP A — INVENTORY BEFORE WRITING PROMPTS
+Before writing any image_prompt, scan the entire story for every figure that is not a main 
+character. For each one, invent a complete, specific canonical appearance:
+  - Age range and gender presentation
+  - Skin tone, hair colour, hair style
+  - Clothing: specific garment types, colours, fabrics, and any distinctive details
+    (e.g. "a stout middle-aged woman in a flour-dusted brown apron over a cream linen blouse, 
+    grey hair pinned in a loose bun, small round spectacles")
+  - Any notable accessories, props they carry, or physical traits
+
+STEP B — APPLY CONSISTENTLY
+- Every time a secondary character appears in any image_prompt, embed their full canonical 
+  description verbatim. Do NOT rely on the model to remember them — repeat the description 
+  every single time they appear, even if it is in the very next sub-scene.
+- If a secondary character only appears once, still provide their full description so the 
+  image model can render them with specificity rather than defaulting to a generic figure.
+- Never use vague placeholders like "an old man", "a villager", or "a figure in the crowd" 
+  without immediately following them with the complete canonical description.
+
+STEP C — GROUPS AND CROWDS
+If the story mentions a group (e.g. "the villagers gathered", "children playing"), describe 
+the group's general visual character (clothing era, colour palette, mood) so the image model 
+renders them with a coherent, consistent look across scenes rather than random appearances.
+
 Output only the structured JSON — no additional commentary."""
 
 
@@ -84,11 +184,18 @@ def _generate_sync(breakdown: StoryBreakdown) -> StoryVisualPlan:
     characters_block = "\n".join(
         f"- {c.name}: {c.description}" for c in breakdown.characters_prompts
     )
+    props_block = (
+        "\n".join(f"- {p.name}: {p.description}" for p in breakdown.prop_descriptions)
+        if breakdown.prop_descriptions
+        else "(none)"
+    )
     user_input = (
         "STORY SCENES:\n"
         + "\n".join(f"Scene {i+1}: {text}" for i, text in enumerate(breakdown.story))
         + "\n\nCHARACTER DESCRIPTIONS:\n"
         + characters_block
+        + "\n\nPROP DESCRIPTIONS:\n"
+        + props_block
         + "\n\nSPECIAL INSTRUCTIONS:\n"
         + (breakdown.special_instructions if breakdown.special_instructions else "(none)")
     )
@@ -96,7 +203,7 @@ def _generate_sync(breakdown: StoryBreakdown) -> StoryVisualPlan:
     client = genai.Client(
         vertexai=True,
         project=GOOGLE_CLOUD_PROJECT,
-        location=GOOGLE_CLOUD_LOCATION,
+        location=GEMINI_TEXT_LOCATION,
     )
 
     response = client.models.generate_content(

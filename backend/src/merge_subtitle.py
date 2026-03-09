@@ -115,6 +115,36 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(lines) + "\n"
 
 
+def scale_timestamps(words: list, speed_factor: float) -> list:
+    """
+    Return a new words list with all start/end times divided by *speed_factor*.
+
+    When audio is sped up by ``speed_factor`` (e.g. 1.2× faster), every word
+    arrives ``speed_factor`` times sooner, so each timestamp must be compressed
+    by the same ratio so that subtitles stay in sync with the accelerated audio.
+
+    Args:
+        words:        List of ``{"word": str, "start": float, "end": float}``
+                      dicts as produced by the Whisper alignment step.
+        speed_factor: The ratio ``original_duration / target_duration``.
+                      Values > 1.0 compress the timeline (audio is faster).
+                      Values == 1.0 are a no-op.
+
+    Returns:
+        A new list of word dicts with adjusted timestamps.
+    """
+    if speed_factor == 1.0:
+        return words
+    return [
+        {
+            "word": w["word"],
+            "start": round(w["start"] / speed_factor, 6),
+            "end": round(w["end"] / speed_factor, 6),
+        }
+        for w in words
+    ]
+
+
 def filter_words_for_range(words: list, t_start: float, t_end: float, offset: float) -> list:
     """Filter words that fall within [t_start, t_end) and shift timestamps by -offset."""
     filtered = []
@@ -160,9 +190,28 @@ def burn_ass_into_video(video_file: str, ass_content: str, output_file: str):
         os.unlink(ass_file.name)
 
 
-def burn_subtitles_per_scene(videos_dir: str, narration_dir: str, output_dir: str):
-    """Burn karaoke subtitles into each sub-scene video."""
+def burn_subtitles_per_scene(
+    videos_dir: str,
+    narration_dir: str,
+    output_dir: str,
+    speed_factors: dict[int, float] | None = None,
+):
+    """Burn karaoke subtitles into each sub-scene video.
+
+    Args:
+        videos_dir:    Directory containing ``scene_N_sub_M.mp4`` files.
+        narration_dir: Directory containing ``scene_N_timestamps.json`` files.
+        output_dir:    Destination directory for subtitled sub-videos.
+        speed_factors: Optional mapping of ``{scene_num: speed_factor}``.
+                       When a scene's audio was sped up before this call, pass
+                       the corresponding speed factor here so that word
+                       timestamps are compressed by the same ratio, keeping
+                       subtitles in sync with the faster audio.
+    """
     os.makedirs(output_dir, exist_ok=True)
+
+    if speed_factors is None:
+        speed_factors = {}
 
     # find all timestamp files
     ts_pattern = os.path.join(narration_dir, "scene_*_timestamps.json")
@@ -185,6 +234,12 @@ def burn_subtitles_per_scene(videos_dir: str, narration_dir: str, output_dir: st
         if not words:
             print(f"Scene {scene_num}: no words, skipping")
             continue
+
+        # Apply speed-factor scaling so subtitles match sped-up audio
+        scene_speed = speed_factors.get(scene_num, 1.0)
+        if scene_speed != 1.0:
+            print(f"  Scene {scene_num}: scaling timestamps by ÷{scene_speed:.4f} (audio sped up ×{scene_speed:.4f})")
+            words = scale_timestamps(words, scene_speed)
 
         # find sub-videos for this scene, sorted by sub index
         sub_pattern = os.path.join(videos_dir, f"scene_{scene_num}_sub_*.mp4")
