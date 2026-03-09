@@ -62,10 +62,11 @@ FAL_API_KEY: str = (
 # ---------------------------------------------------------------------------
 # Gemini models
 # ---------------------------------------------------------------------------
-GEMINI_TEXT_MODEL: str = "gemini-2.5-pro"
+# Gemini 3.1 Pro (preview) — requires location="global" on Vertex AI.
+GEMINI_TEXT_MODEL: str = os.environ.get("GEMINI_TEXT_MODEL", "gemini-3.1-pro-preview")
+GEMINI_TEXT_LOCATION: str = os.environ.get("GEMINI_TEXT_LOCATION", "global")
 # Model used for story breakdown (transcript → scenes + character prompts).
-# Override with e.g. GEMINI_STORY_MODEL=gemini-2.5-pro in .env if needed.
-GEMINI_STORY_MODEL: str = os.environ.get("GEMINI_STORY_MODEL", "gemini-2.5-pro")
+GEMINI_STORY_MODEL: str = os.environ.get("GEMINI_STORY_MODEL", "gemini-3.1-pro-preview")
 # Timeout in seconds for the story breakdown API call (avoids hanging forever).
 STORY_BREAKDOWN_TIMEOUT_S: int = int(os.environ.get("STORY_BREAKDOWN_TIMEOUT_S", "120"))
 # Temporary: use 2.5 flash for image gen (character + scene images)
@@ -180,6 +181,18 @@ if _legacy_dev_skip and not DEV_MODE:
 RATE_LIMIT_DELAYS: list[int] = [15, 30, 60, 120]     # seconds on 429
 VEO_INTERNAL_ERROR_RETRIES: int = 3
 VEO_INTERNAL_ERROR_DELAYS: list[int] = [30, 60, 120]
+
+# Scene image generation retries
+# Rate-limit back-off delays (seconds) — applied on HTTP 429 responses.
+IMAGE_RATE_LIMIT_DELAYS: list[int] = [15, 30, 60, 120]
+# Transient-error back-off delays (seconds) — applied on 5xx / network errors.
+IMAGE_TRANSIENT_DELAYS: list[int] = [5, 15, 30]
+
+# Scene video generation retries (Veo + FAL)
+# Rate-limit back-off delays (seconds) — applied on HTTP 429 responses.
+VIDEO_RATE_LIMIT_DELAYS: list[int] = [15, 30, 60, 120]
+# Transient-error back-off delays (seconds) — applied on 5xx / network / timeout errors.
+VIDEO_TRANSIENT_DELAYS: list[int] = [10, 30, 60]
 
 # ---------------------------------------------------------------------------
 # Video compilation
