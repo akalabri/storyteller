@@ -273,9 +273,9 @@ def _generate_veo_sync(
         err_code = err.get("code") if isinstance(err, dict) else getattr(err, "code", None)
         err_msg = str(err) if err else str(operation)
 
-        if is_veo_safety_error(Exception(err_msg)):
+        if err_code == 3 or is_veo_safety_error(Exception(err_msg)):
             raise VeoSafetyBlockedError(
-                "Veo blocked generation due to person/face safety settings"
+                "Veo blocked generation (safety or third-party content policy)"
             )
 
         if err_code == 13 and internal_attempt < VEO_INTERNAL_ERROR_RETRIES:
