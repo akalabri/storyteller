@@ -43,9 +43,12 @@ from typing import Any, Callable, Coroutine
 from backend.agents.character_agent import generate_character_image
 from backend.agents.compile_agent import compile_video
 from backend.agents.narration_agent import generate_narration
-from backend.agents.scene_image_agent import generate_scene_image
+from backend.agents.scene_image_agent import (
+    ContentViolationError,
+    generate_scene_image,
+)
+from backend.agents.scene_video_agent import VideoGenerationError, generate_scene_video
 from backend.agents.scene_prompt_agent import generate_scene_prompts
-from backend.agents.scene_video_agent import generate_scene_video
 from backend.agents.story_agent import generate_story_breakdown
 from backend.config import DEV_MODE, DEV_SESSION_ID, DEV_STEPS, SEQUENTIAL_GENERATION, session_dir
 from backend.pipeline.state import (
@@ -259,17 +262,20 @@ class StoryOrchestrator:
                 for key, path in dev.narration_paths.items():
                     if key not in self.state.narration_paths and Path(path).exists():
                         self.state.narration_paths[key] = path
-                        if key in dev.narration_timestamps:
-                            self.state.narration_timestamps[key] = dev.narration_timestamps[key]
                 logger.info(
                     "DEV_MODE: loaded %d narration path(s) from dev session",
                     len(dev.narration_paths),
                 )
 
         # ── character_images ──────────────────────────────────────────────────
+        # Character images are only consumed by scene_images and scene_videos;
+        # steps like compile don't need them, so only treat them as a hard
+        # prerequisite when those image/video steps are actually running.
+        _CHAR_CONSUMERS = {"scene_images", "scene_videos"}
         if "character_images" not in DEV_STEPS:
+            chars_needed = bool(DEV_STEPS & _CHAR_CONSUMERS)
             if not dev.character_image_paths:
-                if _need_artifact("character_images"):
+                if chars_needed:
                     raise ValueError(
                         "DEV_MODE: 'character_images' is not in DEV_STEPS but the dev session "
                         "has no character images. Add 'character_images' to DEV_STEPS or run "
@@ -278,7 +284,7 @@ class StoryOrchestrator:
                 logger.warning("DEV_MODE: no character images in dev session — skipping (not needed)")
             else:
                 missing = [p for p in dev.character_image_paths.values() if not Path(p).exists()]
-                if missing and _need_artifact("character_images"):
+                if missing and chars_needed:
                     raise FileNotFoundError(
                         f"DEV_MODE: character image files missing from dev session: {missing}"
                     )
@@ -405,13 +411,12 @@ class StoryOrchestrator:
             step = f"narration:{i}"
             self._emit(ProgressEvent(step, "running"))
             try:
-                timestamps = await generate_narration(
+                await generate_narration(
                     scene_text=scene_text,
                     audio_path=narration_dir / f"scene_{i}.mp3",
                     timestamps_path=narration_dir / f"scene_{i}_timestamps.json",
                 )
                 self.state.narration_paths[key] = str(narration_dir / f"scene_{i}.mp3")
-                self.state.narration_timestamps[key] = timestamps
                 self._emit(ProgressEvent(step, "done"))
             except Exception as exc:
                 self.state.add_error(f"{step}: {exc}")
@@ -487,13 +492,27 @@ class StoryOrchestrator:
     _SCENE_IMAGE_CONCURRENCY = 2
 
     async def _run_scene_images(self, dirty_keys: set[str] | None = None) -> None:
+        """
+        Generate all sub-scene images concurrently (up to _SCENE_IMAGE_CONCURRENCY
+        at a time).
+
+        Failure policy
+        ──────────────
+        Every sub-scene is attempted regardless of other failures so that we
+        collect as many images as possible.  After all tasks complete, if ANY
+        image failed to generate this method raises ``RuntimeError`` listing
+        every failed sub-scene key.  The caller must not proceed to video
+        generation when this raises.
+        """
         assert self.state.visual_plan is not None
         scenes_dir = self._scenes_dir()
         char_paths = self._character_image_paths()
         concurrency = 1 if SEQUENTIAL_GENERATION else self._SCENE_IMAGE_CONCURRENCY
         sem = asyncio.Semaphore(concurrency)
 
-        async def _gen_one(scene_idx: int, sub_idx: int, image_prompt: str):
+        failed_keys: list[str] = []
+
+        async def _gen_one(scene_idx: int, sub_idx: int, image_prompt: str) -> None:
             sub_key = f"scene_{scene_idx}_sub_{sub_idx}"
             event = self._subscene_event(sub_key)
 
@@ -512,11 +531,24 @@ class StoryOrchestrator:
                     )
                     self.state.scene_image_paths[key] = path
                     self._emit(ProgressEvent(step, "done", data={"path": path}))
-                    event.set()   # unblock corresponding video job
+                    event.set()  # unblock corresponding video job
+
+                except ContentViolationError as exc:
+                    # Content policy refusal — non-retryable, log clearly
+                    failed_keys.append(sub_key)
+                    self.state.add_error(f"{step}: content violation — {exc}")
+                    self._emit(ProgressEvent(
+                        step, "failed",
+                        message=f"Content policy violation: {exc}",
+                    ))
+                    event.set()  # release video waiter so it can skip cleanly
+
                 except Exception as exc:
+                    failed_keys.append(sub_key)
                     self.state.add_error(f"{step}: {exc}")
                     self._emit(ProgressEvent(step, "failed", message=str(exc)))
-                    event.set()   # unblock anyway so video can attempt or skip
+                    event.set()  # release video waiter so it can skip cleanly
+
                 finally:
                     self._save()
 
@@ -527,29 +559,53 @@ class StoryOrchestrator:
         ]
         await asyncio.gather(*tasks)
 
+        if failed_keys:
+            raise RuntimeError(
+                f"Scene image generation failed for {len(failed_keys)} sub-scene(s): "
+                + ", ".join(failed_keys)
+                + ". Cannot proceed to video generation."
+            )
+
     # -----------------------------------------------------------------------
     # Phase 4: scene videos (concurrent, gated on image Events)
     # -----------------------------------------------------------------------
 
     async def _run_scene_videos(self, dirty_keys: set[str] | None = None) -> None:
+        """
+        Generate all sub-scene videos concurrently, each gated on its
+        corresponding scene image Event.
+
+        Failure policy
+        ──────────────
+        Every sub-scene is attempted regardless of other failures so that we
+        collect as many videos as possible.  Sub-scenes whose images were not
+        generated are skipped cleanly.  After all tasks complete, if ANY video
+        failed this method raises ``RuntimeError`` listing every failed key.
+        The caller must not proceed to compilation when this raises.
+        """
         assert self.state.visual_plan is not None
         videos_dir = self._videos_dir()
         char_paths = self._character_image_paths()
 
-        async def _gen_one(scene_idx: int, sub_idx: int, video_prompt: str):
+        failed_keys: list[str] = []
+
+        async def _gen_one(scene_idx: int, sub_idx: int, video_prompt: str) -> None:
             sub_key = f"scene_{scene_idx}_sub_{sub_idx}"
 
             if dirty_keys is not None and f"scene_video:{sub_key}" not in dirty_keys:
                 return
 
-            # Wait until the corresponding scene image is ready
+            # Wait until the corresponding scene image is ready (or failed)
             await self._subscene_event(sub_key).wait()
 
             scene_img_path = self.state.scene_image_paths.get(sub_key)
             if not scene_img_path or not Path(scene_img_path).exists():
                 self._emit(ProgressEvent(
                     f"scene_video:{sub_key}", "skipped",
-                    message="Scene image not available",
+                    message=(
+                        f"Skipped: scene image for '{sub_key}' was not generated "
+                        "(see scene_image errors above)."
+                    ),
                 ))
                 return
 
@@ -562,9 +618,17 @@ class StoryOrchestrator:
                 )
                 self.state.scene_video_paths[key] = path
                 self._emit(ProgressEvent(step, "done", data={"path": path}))
-            except Exception as exc:
+
+            except VideoGenerationError as exc:
+                failed_keys.append(sub_key)
                 self.state.add_error(f"{step}: {exc}")
                 self._emit(ProgressEvent(step, "failed", message=str(exc)))
+
+            except Exception as exc:
+                failed_keys.append(sub_key)
+                self.state.add_error(f"{step}: {exc}")
+                self._emit(ProgressEvent(step, "failed", message=str(exc)))
+
             finally:
                 self._save()
 
@@ -581,6 +645,13 @@ class StoryOrchestrator:
                 _gen_one(scene_idx, sub_idx, video_prompt)
                 for scene_idx, sub_idx, video_prompt in subscenes
             ])
+
+        if failed_keys:
+            raise RuntimeError(
+                f"Scene video generation failed for {len(failed_keys)} sub-scene(s): "
+                + ", ".join(failed_keys)
+                + ". Cannot proceed to compilation."
+            )
 
     # -----------------------------------------------------------------------
     # Compile
@@ -670,6 +741,17 @@ class StoryOrchestrator:
             run_images = _should_run("scene_images")
             run_videos = _should_run("scene_videos")
             if run_images or run_videos:
+                # When skipping image generation but running videos, the per-subscene
+                # Events that gate video jobs are never set by _run_scene_images.
+                # Pre-set them here for any images already present in state so video
+                # tasks don't block forever.
+                if not run_images and run_videos and self.state.visual_plan:
+                    for s in self.state.visual_plan.scenes:
+                        for sub in s.subscenes:
+                            key = f"scene_{s.scene_index}_sub_{sub.index}"
+                            if key in self.state.scene_image_paths:
+                                self._subscene_event(key).set()
+
                 if SEQUENTIAL_GENERATION:
                     if run_images:
                         await self._run_scene_images()
