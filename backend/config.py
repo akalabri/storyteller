@@ -118,8 +118,8 @@ FAL_MODEL_ID: str = "fal-ai/veo3.1/reference-to-video"
 FAL_QUEUE_BASE: str = "https://queue.fal.run"
 FAL_RESOLUTION: str = "1080p"
 FAL_DURATION: str = "8s"
-FAL_ASPECT_RATIO: str = "16:9"
-FAL_GENERATE_AUDIO: bool = True
+FAL_ASPECT_RATIO: str = "9:16"
+FAL_GENERATE_AUDIO: bool = False
 FAL_SAFETY_TOLERANCE: str = "6"
 FAL_POLL_INTERVAL_S: int = 15
 FAL_TIMEOUT_S: int = 1800
@@ -208,7 +208,7 @@ SUBTITLE_BG_COLOR: tuple[int, int, int] = (255, 255, 255)
 SUBTITLE_FONT_PATH: Path | None = None   # set to a .ttf path to override default
 
 # Optional background music relative to project root
-BACKGROUND_MUSIC_PATH: Path = _root / "video_compiling" / "assets" / "imgs" / "story_music.mp3"
+BACKGROUND_MUSIC_PATH: Path = _root / "backend" / "assets" / "story_background.mp3"
 
 # ---------------------------------------------------------------------------
 # Sessions directory
