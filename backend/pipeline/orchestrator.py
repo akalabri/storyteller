@@ -57,6 +57,7 @@ from backend.pipeline.state import (
     StoryState,
 )
 from backend.utils.file_io import safe_filename
+from backend.utils.minio_client import upload_session_artifact, upload_session_directory
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,26 @@ class StoryOrchestrator:
 
     def _save(self) -> None:
         self.state.save(self.state_path)
+
+    async def _upload_to_minio(self, local_path: str, relative_path: str) -> None:
+        """Best-effort upload of a single file to MinIO."""
+        print(f"[Orchestrator] _upload_to_minio called: local={local_path}, rel={relative_path}")
+        try:
+            await upload_session_artifact(self.session_id, local_path, relative_path)
+            print(f"[Orchestrator] _upload_to_minio OK: {relative_path}")
+        except Exception as exc:
+            print(f"[Orchestrator] _upload_to_minio FAILED: {relative_path} — {exc}")
+            import traceback; traceback.print_exc()
+
+    async def _upload_dir_to_minio(self, local_dir: Path, prefix: str) -> None:
+        """Best-effort upload of all files in a directory to MinIO."""
+        print(f"[Orchestrator] _upload_dir_to_minio called: dir={local_dir}, prefix={prefix}")
+        try:
+            await upload_session_directory(self.session_id, str(local_dir), prefix)
+            print(f"[Orchestrator] _upload_dir_to_minio OK: {prefix}")
+        except Exception as exc:
+            print(f"[Orchestrator] _upload_dir_to_minio FAILED: {prefix} — {exc}")
+            import traceback; traceback.print_exc()
 
     def _char_dir(self) -> Path:
         return self.out_dir / "characters"
@@ -390,6 +411,7 @@ class StoryOrchestrator:
             raise
         finally:
             self._save()
+            await self._upload_to_minio(str(self.state_path), "story_state.json")
 
     # -----------------------------------------------------------------------
     # Phase 1a: narration (sequential)
@@ -418,6 +440,14 @@ class StoryOrchestrator:
                 )
                 self.state.narration_paths[key] = str(narration_dir / f"scene_{i}.mp3")
                 self._emit(ProgressEvent(step, "done"))
+                # Upload narration files to MinIO
+                await self._upload_to_minio(
+                    str(narration_dir / f"scene_{i}.mp3"), f"narration/scene_{i}.mp3"
+                )
+                await self._upload_to_minio(
+                    str(narration_dir / f"scene_{i}_timestamps.json"),
+                    f"narration/scene_{i}_timestamps.json",
+                )
             except Exception as exc:
                 self.state.add_error(f"{step}: {exc}")
                 self._emit(ProgressEvent(step, "failed", message=str(exc)))
@@ -445,6 +475,7 @@ class StoryOrchestrator:
                 name, path = await generate_character_image(char, char_dir)
                 self.state.character_image_paths[slug] = path
                 self._emit(ProgressEvent(step, "done", data={"path": path}))
+                await self._upload_to_minio(path, f"characters/{Path(path).name}")
             except Exception as exc:
                 self.state.add_error(f"{step}: {exc}")
                 self._emit(ProgressEvent(step, "failed", message=str(exc)))
@@ -531,6 +562,7 @@ class StoryOrchestrator:
                     )
                     self.state.scene_image_paths[key] = path
                     self._emit(ProgressEvent(step, "done", data={"path": path}))
+                    await self._upload_to_minio(path, f"scenes/{Path(path).name}")
                     event.set()  # unblock corresponding video job
 
                 except ContentViolationError as exc:
@@ -618,6 +650,7 @@ class StoryOrchestrator:
                 )
                 self.state.scene_video_paths[key] = path
                 self._emit(ProgressEvent(step, "done", data={"path": path}))
+                await self._upload_to_minio(path, f"videos/{Path(path).name}")
 
             except VideoGenerationError as exc:
                 failed_keys.append(sub_key)
@@ -673,6 +706,7 @@ class StoryOrchestrator:
             )
             self.state.final_video_path = path
             self._emit(ProgressEvent("compile", "done", data={"path": path}))
+            await self._upload_to_minio(path, "final/story.mp4")
         except Exception as exc:
             self.state.add_error(f"compile: {exc}")
             self._emit(ProgressEvent("compile", "failed", message=str(exc)))
@@ -776,6 +810,7 @@ class StoryOrchestrator:
 
         finally:
             self._save()
+            await self._upload_to_minio(str(self.state_path), "story_state.json")
             self._emit(ProgressEvent(
                 "pipeline",
                 self.state.status.value,
@@ -866,6 +901,7 @@ class StoryOrchestrator:
 
         finally:
             self._save()
+            await self._upload_to_minio(str(self.state_path), "story_state.json")
             self._emit(ProgressEvent(
                 "pipeline",
                 self.state.status.value,

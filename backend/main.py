@@ -279,9 +279,9 @@ async def get_state(session_id: str) -> JSONResponse:
 # GET /api/story/{session_id}/video
 # ---------------------------------------------------------------------------
 
-@app.get("/api/story/{session_id}/video")
-async def get_video(session_id: str) -> FileResponse:
-    """Stream the final compiled MP4 video."""
+@app.get("/api/story/{session_id}/video", response_model=None)
+async def get_video(session_id: str):
+    """Stream the final compiled MP4 video, or redirect to MinIO presigned URL."""
     if session_id not in _sessions:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -289,15 +289,23 @@ async def get_video(session_id: str) -> FileResponse:
     if not state.final_video_path:
         raise HTTPException(status_code=404, detail="Final video not yet available")
 
+    # Serve from local disk if available
     video_path = Path(state.final_video_path)
-    if not video_path.exists():
-        raise HTTPException(status_code=404, detail="Video file not found on disk")
+    if video_path.exists():
+        return FileResponse(
+            path=str(video_path),
+            media_type="video/mp4",
+            filename="story.mp4",
+        )
 
-    return FileResponse(
-        path=str(video_path),
-        media_type="video/mp4",
-        filename="story.mp4",
-    )
+    # Fall back to MinIO presigned URL
+    from backend.utils.minio_client import presigned_url, session_object_key, object_exists_sync
+    minio_key = session_object_key(session_id, "final/story.mp4")
+    if object_exists_sync(minio_key):
+        url = await presigned_url(minio_key)
+        return JSONResponse({"video_url": url})
+
+    raise HTTPException(status_code=404, detail="Video file not found")
 
 
 # ---------------------------------------------------------------------------
