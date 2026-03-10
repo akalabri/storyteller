@@ -211,6 +211,15 @@ SUBTITLE_FONT_PATH: Path | None = None   # set to a .ttf path to override defaul
 BACKGROUND_MUSIC_PATH: Path = _root / "backend" / "assets" / "story_background.mp3"
 
 # ---------------------------------------------------------------------------
+# MinIO
+# ---------------------------------------------------------------------------
+MINIO_ENDPOINT: str = os.environ.get("MINIO_ENDPOINT", "localhost:9000")
+MINIO_ACCESS_KEY: str = os.environ.get("MINIO_ACCESS_KEY", "minio")
+MINIO_SECRET_KEY: str = os.environ.get("MINIO_SECRET_KEY", "minio1234")
+MINIO_BUCKET: str = os.environ.get("MINIO_BUCKET", "storyteller")
+MINIO_SECURE: bool = os.environ.get("MINIO_SECURE", "0") == "1"
+
+# ---------------------------------------------------------------------------
 # Sessions directory
 # ---------------------------------------------------------------------------
 SESSIONS_DIR: Path = _root / "sessions"
