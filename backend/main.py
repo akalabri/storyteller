@@ -50,6 +50,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from backend.agents.conversation_agent import run_live_conversation
+from backend.agents.edit_conversation_agent import run_edit_conversation
 from backend.agents.edit_agent import plan_edit
 from backend.config import DEV_MODE, DEV_SESSION_ID, DEV_STEPS, session_dir
 from backend.pipeline.orchestrator import ProgressEvent, StoryOrchestrator
@@ -122,6 +123,21 @@ class EditRequest(BaseModel):
 
 
 class EditResponse(BaseModel):
+    session_id: str
+    dirty_keys: list[str]
+    reasoning: str
+
+
+class EditConversationStartResponse(BaseModel):
+    session_id: str
+
+
+class EditFromTranscriptRequest(BaseModel):
+    # Optional override — if omitted, the saved edit_conversation_transcript is used
+    transcript: str | None = None
+
+
+class EditFromTranscriptResponse(BaseModel):
     session_id: str
     dirty_keys: list[str]
     reasoning: str
@@ -358,6 +374,144 @@ async def edit_story(session_id: str, request: EditRequest) -> EditResponse:
     )
 
     return EditResponse(
+        session_id=session_id,
+        dirty_keys=sorted(dirty_keys),
+        reasoning=reasoning,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/edit-conversation/start
+# ---------------------------------------------------------------------------
+
+@app.post("/api/edit-conversation/start", response_model=EditConversationStartResponse)
+async def start_edit_conversation(session_id: str | None = None) -> EditConversationStartResponse:
+    """
+    Prepare a session for an edit voice conversation.
+    If session_id is provided (e.g. the dev session), that session is used as-is
+    so the edit agent has access to the existing StoryState.
+    Otherwise a new session id is created.
+    """
+    sid = session_id or uuid.uuid4().hex
+    _get_or_create_session(sid)
+
+    # If the session has a saved state on disk, load it into the orchestrator
+    # so the edit agent can access breakdown / visual_plan context.
+    state_path = session_dir(sid) / "story_state.json"
+    if state_path.exists() and sid in _sessions:
+        from backend.pipeline.state import StoryState as _SS
+        saved = _SS.load(state_path)
+        _sessions[sid]["orchestrator"].state = saved
+
+    logger.info("Edit conversation session ready: %s", sid)
+    return EditConversationStartResponse(session_id=sid)
+
+
+# ---------------------------------------------------------------------------
+# WS /ws/edit-conversation/{session_id}
+# ---------------------------------------------------------------------------
+
+@app.websocket("/ws/edit-conversation/{session_id}")
+async def edit_conversation_websocket(websocket: WebSocket, session_id: str) -> None:
+    """
+    Real-time edit consultation voice conversation bridge.
+
+    Same audio/control protocol as /ws/conversation/{session_id} but uses the
+    edit-focused system prompt. When the session ends, the transcript is saved
+    to the session's StoryState.edit_conversation_transcript.
+    """
+    await websocket.accept()
+    logger.info("Edit conversation WS connected: %s", session_id)
+    try:
+        await run_edit_conversation(session_id, websocket)
+    except Exception as exc:
+        logger.exception("Edit conversation WS error for %s: %s", session_id, exc)
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        logger.info("Edit conversation WS closed: %s", session_id)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/story/{session_id}/edit-from-transcript
+# ---------------------------------------------------------------------------
+
+@app.post("/api/story/{session_id}/edit-from-transcript", response_model=EditFromTranscriptResponse)
+async def edit_from_transcript(
+    session_id: str,
+    request: EditFromTranscriptRequest,
+) -> EditFromTranscriptResponse:
+    """
+    Process an edit conversation transcript through plan_edit and kick off
+    selective regeneration.
+
+    The transcript can be supplied in the request body, or omitted to use the
+    saved edit_conversation_transcript from the session's StoryState.
+    """
+    # Ensure session is loaded
+    state_path = session_dir(session_id) / "story_state.json"
+    if session_id not in _sessions:
+        if state_path.exists():
+            _get_or_create_session(session_id)
+        else:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+    # Always reload from disk so we pick up the edit_conversation_transcript
+    # that was written by the edit conversation agent after the WS session ended.
+    if state_path.exists():
+        from backend.pipeline.state import StoryState as _SS
+        saved = _SS.load(state_path)
+        _sessions[session_id]["orchestrator"].state = saved
+
+    session = _sessions[session_id]
+    orch: StoryOrchestrator = session["orchestrator"]
+    state = orch.state
+
+    if state.status == PipelineStatus.RUNNING:
+        raise HTTPException(
+            status_code=409, detail="Pipeline is still running. Wait for it to finish."
+        )
+
+    if state.breakdown is None:
+        raise HTTPException(
+            status_code=400, detail="Story has not been generated yet."
+        )
+
+    # Resolve transcript
+    transcript = request.transcript or state.edit_conversation_transcript
+    if not transcript:
+        raise HTTPException(
+            status_code=400,
+            detail="No edit transcript available. Complete an edit conversation first.",
+        )
+
+    # Plan the edit using the full conversation transcript as the edit message
+    updated_state, dirty_keys = await plan_edit(transcript, state)
+
+    orch.state = updated_state
+    orch._save()
+
+    reasoning = ""
+    if updated_state.edit_history:
+        reasoning = updated_state.edit_history[-1].get("reasoning", "")
+
+    if session["task"] and not session["task"].done():
+        session["task"].cancel()
+
+    async def _run_edit():
+        await orch.run_selective(dirty_keys)
+
+    session["task"] = asyncio.create_task(_run_edit())
+    logger.info(
+        "Edit-from-transcript started for session %s. Dirty keys (%d): %s",
+        session_id,
+        len(dirty_keys),
+        sorted(dirty_keys),
+    )
+
+    return EditFromTranscriptResponse(
         session_id=session_id,
         dirty_keys=sorted(dirty_keys),
         reasoning=reasoning,

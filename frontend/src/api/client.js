@@ -171,6 +171,78 @@ export async function submitEdit(sessionId, message) {
   return post(`/api/story/${sessionId}/edit`, { message });
 }
 
+/**
+ * Prepare a session for an edit voice conversation.
+ * Pass the existing session_id so the edit agent has access to the story state.
+ *
+ * @param {string} sessionId  The existing story session to edit.
+ * @returns {Promise<{ session_id: string }>}
+ */
+export async function startEditConversationSession(sessionId) {
+  return post(`/api/edit-conversation/start?session_id=${encodeURIComponent(sessionId)}`, {});
+}
+
+/**
+ * Open a WebSocket for the edit voice conversation.
+ * Same protocol as openConversationSocket but connects to the edit endpoint.
+ *
+ * @param {string}   sessionId
+ * @param {function} onAudio   Called with each ArrayBuffer of PCM audio.
+ * @param {function} onEvent   Called with each parsed JSON control object.
+ * @param {function} onClose   Called when the socket closes (optional).
+ * @returns {{ sendAudio: function(ArrayBuffer), sendEndSession: function, close: function }}
+ */
+export function openEditConversationSocket(sessionId, onAudio, onEvent, onClose) {
+  const wsBase = BASE
+    ? BASE.replace(/^https?:\/\//, (m) => (m === 'https://' ? 'wss://' : 'ws://'))
+    : `ws://${window.location.host}`;
+
+  const url = `${wsBase}/ws/edit-conversation/${sessionId}`;
+  const ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onmessage = (evt) => {
+    if (evt.data instanceof ArrayBuffer) {
+      onAudio(evt.data);
+    } else {
+      try {
+        const data = JSON.parse(evt.data);
+        onEvent(data);
+      } catch {
+        // ignore malformed frames
+      }
+    }
+  };
+
+  ws.onclose = () => { if (onClose) onClose(); };
+  ws.onerror = (err) => { console.error('[EditConvWS] error', err); };
+
+  return {
+    sendAudio: (buffer) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(buffer);
+    },
+    sendEndSession: () => {
+      if (ws.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({ type: 'end_session' }));
+    },
+    close: () => {
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+        ws.close();
+    },
+  };
+}
+
+/**
+ * Process the saved edit conversation transcript through the edit LLM
+ * and kick off selective regeneration.
+ *
+ * @param {string} sessionId
+ * @returns {Promise<{ session_id: string, dirty_keys: string[], reasoning: string }>}
+ */
+export async function submitEditFromTranscript(sessionId) {
+  return post(`/api/story/${sessionId}/edit-from-transcript`, {});
+}
+
 // ---------------------------------------------------------------------------
 // Status polling
 // ---------------------------------------------------------------------------

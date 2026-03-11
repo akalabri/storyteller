@@ -34,10 +34,13 @@ function estimateTotalSteps(sceneCount = 5, charCount = 2) {
  * ProcessingView
  *
  * Props:
- *   sessionId  — backend session id
+ *   sessionId          — backend session id
  *   onFinish(storyTitle) — called when pipeline reports "done"
+ *   pipelineStartedAt  — timestamp (ms) when the pipeline was kicked off.
+ *                        Used to ignore a stale "done" state from a previous
+ *                        run that is still sitting in the backend state.
  */
-const ProcessingView = ({ sessionId, onFinish }) => {
+const ProcessingView = ({ sessionId, onFinish, pipelineStartedAt }) => {
     const [progress, setProgress] = useState(0);
     const [statusText, setStatusText] = useState('Connecting…');
     const [errorText, setErrorText] = useState(null);
@@ -62,6 +65,10 @@ const ProcessingView = ({ sessionId, onFinish }) => {
     const startPolling = useCallback(() => {
         if (finishedRef.current) return;
 
+        // Track whether we've seen the pipeline transition away from "done"
+        // at least once (i.e. it went to "running") so we know a fresh run started.
+        let seenRunning = false;
+
         const poll = async () => {
             if (finishedRef.current) return;
             try {
@@ -79,9 +86,17 @@ const ProcessingView = ({ sessionId, onFinish }) => {
 
                 // Find the most recent running step for status text
                 const running = (state.steps ?? []).find((s) => s.status === 'running');
-                if (running) setStatusText(stepToPhrase(running.step));
+                if (running) {
+                    setStatusText(stepToPhrase(running.step));
+                    seenRunning = true;
+                }
 
-                if (state.status === 'done') {
+                if (state.status === 'running') seenRunning = true;
+
+                // Only treat "done" as finished if we've seen the pipeline
+                // actively running since this view mounted, OR if pipelineStartedAt
+                // is null (legacy path without timestamp).
+                if (state.status === 'done' && (seenRunning || !pipelineStartedAt)) {
                     handleFinish(state);
                     return;
                 }
@@ -96,28 +111,38 @@ const ProcessingView = ({ sessionId, onFinish }) => {
         };
 
         poll();
-    }, [sessionId, handleFinish]);
+    }, [sessionId, handleFinish, pipelineStartedAt]);
 
     useEffect(() => {
         if (!sessionId) return;
 
-        // Fetch state immediately — gives accurate step count and catches the
-        // case where the pipeline already finished before this view mounted.
+        // Fetch state immediately — gives accurate step count.
+        // We do NOT treat a "done" status here as a signal to finish, because
+        // it could be stale from a previous pipeline run that completed before
+        // this view mounted (e.g. after an edit). We only finish on a fresh
+        // "done" event from the WebSocket or a poll that runs after mount.
         getState(sessionId)
             .then((state) => {
                 const sceneCount = state.breakdown?.story?.length ?? 5;
                 const charCount = state.breakdown?.characters_prompts?.length ?? 2;
                 totalRef.current = estimateTotalSteps(sceneCount, charCount);
-                if (state.status === 'done') {
-                    handleFinish(state);
-                }
             })
             .catch(() => { /* use default estimate */ });
+
+        // Track whether we've seen any "running" step event since mounting.
+        // This prevents a stale "pipeline done" event (replayed from a previous
+        // run) from immediately resolving the view before the new run starts.
+        let wsSeenRunning = false;
 
         const closeSocket = openProgressSocket(
             sessionId,
             (event) => {
                 const { step, status, message } = event;
+
+                if (status === 'running') {
+                    wsSeenRunning = true;
+                    setStatusText(stepToPhrase(step));
+                }
 
                 if (status === 'done' || status === 'failed' || status === 'skipped') {
                     completedRef.current += 1;
@@ -128,17 +153,13 @@ const ProcessingView = ({ sessionId, onFinish }) => {
                     setProgress(pct);
                 }
 
-                if (status === 'running') {
-                    setStatusText(stepToPhrase(step));
-                }
-
                 if (status === 'failed') {
                     setStatusText(`${stepToPhrase(step)} (retrying…)`);
                 }
 
                 // Pipeline terminal events
                 if (step === 'pipeline') {
-                    if (status === 'done') {
+                    if (status === 'done' && (wsSeenRunning || !pipelineStartedAt)) {
                         getState(sessionId)
                             .then((state) => handleFinish(state))
                             .catch(() => handleFinish(null));

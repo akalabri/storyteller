@@ -12,12 +12,16 @@ import './ResultView.css';
  *   storyTitle — title derived from the story breakdown
  *   onEdit     — called when user clicks "Edit via Conversation"
  */
-const ResultView = ({ sessionId, storyTitle, onEdit }) => {
+const ResultView = ({ sessionId, storyTitle, onEdit, pipelineStartedAt }) => {
     const videoRef = useRef(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [timelineProgress, setTimelineProgress] = useState(0);
 
-    const src = sessionId ? videoUrl(sessionId) : null;
+    // Append a cache-busting query param so the browser always fetches the
+    // freshly compiled video rather than serving a cached copy from a prior run.
+    const src = sessionId
+        ? `${videoUrl(sessionId)}?t=${pipelineStartedAt ?? 0}`
+        : null;
 
     // Sync play/pause state with the native video element
     const handlePlayToggle = () => {

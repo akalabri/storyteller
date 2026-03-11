@@ -12,6 +12,9 @@ function App() {
   // Dev mode: fetched from backend (single source of truth: backend .env DEV_MODE)
   const [devMode, setDevMode] = useState(false);
   const [devSessionId, setDevSessionId] = useState('dev_session');
+  // dev_steps array from backend — used to route the dev button behaviour.
+  // When it contains 'editing', the dev button goes straight to the editing UI.
+  const [devSteps, setDevSteps] = useState([]);
 
   // Shared session data passed between views
   const [sessionId, setSessionId] = useState(null);
@@ -19,12 +22,17 @@ function App() {
   // true when re-entering CONVERSATION from RESULT (edit mode)
   const [isEditMode, setIsEditMode] = useState(false);
   const [devError, setDevError] = useState(null);
+  // Timestamp set each time we kick off a new pipeline run.
+  // ProcessingView uses it to ignore stale "done" state from a previous run.
+  // ResultView uses it as a cache-buster on the video URL.
+  const [pipelineStartedAt, setPipelineStartedAt] = useState(null);
 
   useEffect(() => {
     getDevMode()
-      .then(({ dev_mode, dev_session_id }) => {
+      .then(({ dev_mode, dev_session_id, dev_steps }) => {
         setDevMode(dev_mode);
         setDevSessionId(dev_session_id || 'dev_session');
+        setDevSteps(Array.isArray(dev_steps) ? dev_steps : []);
       })
       .catch(() => {
         setDevMode(false);
@@ -37,14 +45,21 @@ function App() {
   };
 
   // Called when the user clicks "Generate" on the landing page.
-  // In dev mode: skip conversation, fire the pipeline directly using the dev session.
+  // In dev mode with DEV_STEPS=editing: go straight to the editing UI using the dev session.
+  // In dev mode (other steps): skip conversation, fire the pipeline directly.
   // In normal mode: go to the conversation view.
   const handleStart = async () => {
-    if (devMode) {
+    if (devMode && devSteps.includes('editing')) {
+      // Jump straight to editing — use the dev session as the base state.
+      setSessionId(devSessionId);
+      setIsEditMode(true);
+      transitionTo('CONVERSATION');
+    } else if (devMode) {
       setDevError(null);
       try {
         const result = await startDevGeneration(devSessionId);
         setSessionId(result.session_id);
+        setPipelineStartedAt(Date.now());
         transitionTo('PROCESSING');
       } catch (err) {
         console.error('[DevMode] startDevGeneration failed:', err);
@@ -60,6 +75,7 @@ function App() {
   const handleConversationComplete = (sid) => {
     setSessionId(sid);
     setIsEditMode(false);
+    setPipelineStartedAt(Date.now());
     transitionTo('PROCESSING');
   };
 
@@ -82,6 +98,7 @@ function App() {
         <LandingView
           onStart={handleStart}
           devMode={devMode}
+          devSteps={devSteps}
           devError={devError}
         />
       )}
@@ -96,6 +113,7 @@ function App() {
         <ProcessingView
           sessionId={sessionId}
           onFinish={handleProcessingFinish}
+          pipelineStartedAt={pipelineStartedAt}
         />
       )}
       {viewState === 'RESULT' && (
@@ -103,6 +121,7 @@ function App() {
           sessionId={sessionId}
           storyTitle={storyTitle}
           onEdit={handleEdit}
+          pipelineStartedAt={pipelineStartedAt}
         />
       )}
     </div>

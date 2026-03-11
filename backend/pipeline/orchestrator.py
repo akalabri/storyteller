@@ -522,6 +522,11 @@ class StoryOrchestrator:
                     event.set()
                 return
 
+            # Delete the existing file so the agent doesn't skip it
+            existing = scenes_dir / f"scene_{scene_idx}_sub_{sub_idx}.png"
+            if existing.exists():
+                existing.unlink()
+
             async with sem:
                 step = f"scene_image:{sub_key}"
                 self._emit(ProgressEvent(step, "running"))
@@ -594,6 +599,11 @@ class StoryOrchestrator:
 
             if dirty_keys is not None and f"scene_video:{sub_key}" not in dirty_keys:
                 return
+
+            # Delete the existing file so the agent doesn't skip it
+            existing = videos_dir / f"scene_{scene_idx}_sub_{sub_idx}.mp4"
+            if existing.exists():
+                existing.unlink()
 
             # Wait until the corresponding scene image is ready (or failed)
             await self._subscene_event(sub_key).wait()

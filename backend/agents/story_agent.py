@@ -41,7 +41,8 @@ Split the story into 4–5 short scenes (use 3 only if the story is genuinely mi
 SCENE RULES — follow every rule for every scene:
 • ONE narrative beat per scene — a single moment, action, or turn of events. Do not cram \
   multiple plot points into one scene.
-• Length: 60–90 words per scene. Never exceed 100 words. Be punchy and precise.
+• Use simple language for the story.
+• Length: 40-60 words per scene only. Never exceed 60 words. Be punchy and precise.
 • Write genuine narrative prose (the story itself, not a summary or description of it).
 • Use vivid, concrete sensory details — what characters see, hear, smell, feel.
 • End each scene on a small hook or tension that pulls the reader into the next.

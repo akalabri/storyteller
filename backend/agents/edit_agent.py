@@ -41,7 +41,7 @@ from pydantic import BaseModel, Field
 
 from backend.config import (
     GEMINI_TEXT_MODEL,
-    GOOGLE_CLOUD_LOCATION,
+    GEMINI_TEXT_LOCATION,
     GOOGLE_CLOUD_PROJECT,
 )
 from backend.pipeline.state import (
@@ -314,7 +314,7 @@ def _plan_edit_sync(
     client = genai.Client(
         vertexai=True,
         project=GOOGLE_CLOUD_PROJECT,
-        location=GOOGLE_CLOUD_LOCATION,
+        location=GEMINI_TEXT_LOCATION,
     )
 
     response = client.models.generate_content(
