@@ -128,6 +128,8 @@ class StoryState(BaseModel):
 
     # --- Source material ---
     conversation_transcript: str | None = None
+    # Transcript from the edit voice conversation (gathered by edit_conversation_agent)
+    edit_conversation_transcript: str | None = None
 
     # --- LLM-generated structured data ---
     breakdown: StoryBreakdown | None = None

@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   openConversationSocket,
+  openEditConversationSocket,
   startConversationSession,
+  startEditConversationSession,
   startGeneration,
-  submitEdit,
+  submitEditFromTranscript,
 } from '../api/client';
 import './ConversationView.css';
 
@@ -97,7 +99,6 @@ const ConversationView = ({ onComplete, sessionId: initialSessionId, isEditMode 
   const [transcriptLog, setTranscriptLog] = useState([]);
 
   // ── Edit mode state ────────────────────────────────────────────────────────
-  const [editText, setEditText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   // ── Refs (don't trigger re-renders) ───────────────────────────────────────
@@ -247,19 +248,94 @@ const ConversationView = ({ onComplete, sessionId: initialSessionId, isEditMode 
     }
   }, [onComplete]);
 
-  // ── Edit mode submit ──────────────────────────────────────────────────────
-  const handleEditSubmit = useCallback(async () => {
-    const text = editText.trim();
-    if (!text) { setError('Please describe what you want to change.'); return; }
+  // ── Edit voice conversation ───────────────────────────────────────────────
+  const startEditVoiceConversation = useCallback(async () => {
     setError(null);
-    setIsLoading(true);
-    setAiState('processing');
-    setStatusMessage('Planning your edit…');
+    setVoicePhase('connecting');
+    setStatusMessage('Connecting to editor…');
+
+    playerRef.current.initContext();
+
     try {
-      const result = await submitEdit(initialSessionId, text);
+      // 1. Prepare the session on the backend (reuses the existing session_id)
+      const { session_id } = await startEditConversationSession(initialSessionId);
+      sessionIdRef.current = session_id;
+
+      // 2. Microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+      });
+      captureStreamRef.current = stream;
+
+      // 3. AudioContext + AudioWorklet for capture
+      const captureCtx = new AudioContext();
+      captureCtxRef.current = captureCtx;
+      await captureCtx.audioWorklet.addModule('/audio/audioWorkletProcessor.js');
+      const micSource = captureCtx.createMediaStreamSource(stream);
+      const worklet = new AudioWorkletNode(captureCtx, 'pcm-capture-processor');
+      micSource.connect(worklet);
+
+      // 4. Open edit conversation WebSocket
+      const ws = openEditConversationSocket(
+        session_id,
+        (buffer) => playerRef.current.play(buffer),
+        (event) => {
+          if (event.type === 'state') {
+            setAiState(event.value);
+            if (event.value === 'listening')  setStatusMessage('Listening…');
+            if (event.value === 'speaking')   setStatusMessage('Editor is speaking…');
+            if (event.value === 'processing') setStatusMessage('Wrapping up…');
+          } else if (event.type === 'transcript') {
+            setTranscriptLog((prev) => [
+              ...prev,
+              { speaker: event.speaker, text: event.text, id: Date.now() + Math.random() },
+            ]);
+          } else if (event.type === 'session_end') {
+            // Stop capture hardware
+            captureCtxRef.current?.close().catch(() => {});
+            captureStreamRef.current?.getTracks().forEach((t) => t.stop());
+            wsRef.current?.close();
+            setVoicePhase('done');
+            setAiState('processing');
+            setStatusMessage('Edit conversation complete — ready to apply changes!');
+          } else if (event.type === 'error') {
+            setError(event.message || 'Connection error.');
+            setVoicePhase('idle');
+            setStatusMessage('Describe what you want to change…');
+          }
+        },
+        () => {
+          if (voicePhaseRef.current === 'talking') {
+            setStatusMessage('Connection closed.');
+            setVoicePhase('idle');
+          }
+        },
+      );
+      wsRef.current = ws;
+
+      worklet.port.onmessage = (e) => ws.sendAudio(e.data);
+
+      setVoicePhase('talking');
       setAiState('speaking');
+      setStatusMessage('Editor is greeting you — listen first, then speak…');
+    } catch (err) {
+      console.error('[ConvView] startEditVoiceConversation error:', err);
+      setError(err.message || 'Could not start edit conversation. Check microphone permissions.');
+      setVoicePhase('idle');
+      setStatusMessage('Describe what you want to change…');
+    }
+  }, [initialSessionId]);
+
+  // ── Apply edits (after edit voice conversation ends) ──────────────────────
+  const handleApplyEdits = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    setAiState('processing');
+    setStatusMessage('Planning your edits…');
+    try {
+      const result = await submitEditFromTranscript(sessionIdRef.current);
       setStatusMessage(result.reasoning || 'Edit plan ready — regenerating…');
-      await new Promise((r) => setTimeout(r, 1800));
+      await new Promise((r) => setTimeout(r, 1200));
       onComplete(result.session_id);
     } catch (err) {
       console.error(err);
@@ -267,7 +343,7 @@ const ConversationView = ({ onComplete, sessionId: initialSessionId, isEditMode 
       setAiState('listening');
       setIsLoading(false);
     }
-  }, [editText, initialSessionId, onComplete]);
+  }, [onComplete]);
 
   // ── Orb + soundwaves shared block ─────────────────────────────────────────
   const OrbBlock = () => (
@@ -288,7 +364,7 @@ const ConversationView = ({ onComplete, sessionId: initialSessionId, isEditMode 
   );
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Edit mode — keep simple textarea UI
+  // Edit mode — full voice conversation with the edit AI
   // ─────────────────────────────────────────────────────────────────────────
   if (isEditMode) {
     return (
@@ -304,22 +380,52 @@ const ConversationView = ({ onComplete, sessionId: initialSessionId, isEditMode 
           <p className="transcript-text">{statusMessage}</p>
         </div>
 
-        <div className="input-area">
-          <textarea
-            className="conversation-input"
-            value={editText}
-            onChange={(e) => setEditText(e.target.value)}
-            placeholder="e.g. &quot;Make Ember's fur darker, a deep crimson instead of orange&quot;"
-            rows={4}
-            disabled={isLoading}
-          />
-          {error && <p className="input-error">{error}</p>}
-        </div>
+        {transcriptLog.length > 0 && (
+          <div className="live-transcript">
+            {transcriptLog.map((entry) => (
+              <div key={entry.id} className={`transcript-entry ${entry.speaker}`}>
+                <span className="entry-speaker">
+                  {entry.speaker === 'user' ? 'You' : 'Editor'}
+                </span>
+                <span className="entry-text">{entry.text}</span>
+              </div>
+            ))}
+            <div ref={transcriptEndRef} />
+          </div>
+        )}
 
-        <div className="action-container">
-          <button className="btn-secondary" onClick={handleEditSubmit} disabled={isLoading}>
-            {isLoading ? 'Working…' : 'Apply Edit ✦'}
-          </button>
+        {error && <p className="input-error" style={{ textAlign: 'center', marginTop: '0.5rem' }}>{error}</p>}
+
+        <div className="action-container voice-actions">
+          {voicePhase === 'idle' && (
+            <button className="btn-primary-voice" onClick={startEditVoiceConversation}>
+              Start Editing ✦
+            </button>
+          )}
+
+          {voicePhase === 'connecting' && (
+            <button className="btn-secondary" disabled>Connecting…</button>
+          )}
+
+          {voicePhase === 'talking' && (
+            <button className="btn-end-session" onClick={handleEndSession}>
+              Done Editing
+            </button>
+          )}
+
+          {voicePhase === 'ending' && (
+            <button className="btn-end-session" disabled>Ending…</button>
+          )}
+
+          {voicePhase === 'done' && (
+            <button
+              className="btn-secondary"
+              onClick={handleApplyEdits}
+              disabled={isLoading}
+            >
+              {isLoading ? 'Planning edits…' : 'Apply Changes ✦'}
+            </button>
+          )}
         </div>
       </div>
     );
