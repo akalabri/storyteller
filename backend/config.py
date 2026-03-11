@@ -211,6 +211,14 @@ SUBTITLE_FONT_PATH: Path | None = None   # set to a .ttf path to override defaul
 BACKGROUND_MUSIC_PATH: Path = _root / "backend" / "assets" / "story_background.mp3"
 
 # ---------------------------------------------------------------------------
+# PostgreSQL
+# ---------------------------------------------------------------------------
+DATABASE_URL: str = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://storyteller:storyteller@localhost:5432/storyteller",
+)
+
+# ---------------------------------------------------------------------------
 # MinIO
 # ---------------------------------------------------------------------------
 MINIO_ENDPOINT: str = os.environ.get("MINIO_ENDPOINT", "localhost:9000")
