@@ -283,6 +283,22 @@ export function videoUrl(sessionId) {
 }
 
 // ---------------------------------------------------------------------------
+// Page tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * Track a page/stage navigation event.
+ * Fire-and-forget — errors are silently ignored so tracking
+ * never blocks the UI.
+ *
+ * @param {string}      page       LANDING | CONVERSATION | PROCESSING | RESULT
+ * @param {string|null} sessionId  Current session ID (null if none yet).
+ */
+export function trackPage(page, sessionId = null) {
+  post('/api/track', { page, session_id: sessionId }).catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
 // WebSocket progress stream
 // ---------------------------------------------------------------------------
 

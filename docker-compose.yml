@@ -4,6 +4,9 @@ services:
       context: .
       dockerfile: backend/Dockerfile.backend
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://storyteller:storyteller@postgres:5432/storyteller
+      MINIO_ENDPOINT: minio:9000
     volumes:
       # Mount Google service account key (read-only)
       - ./key.json:/app/key.json:ro
@@ -12,7 +15,10 @@ services:
     ports:
       - "8001:8000"
     depends_on:
-      - minio
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
 
   frontend:
     build:
@@ -22,6 +28,36 @@ services:
       - "5173:5173"
     depends_on:
       - backend
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: storyteller-postgres
+    environment:
+      POSTGRES_USER: storyteller
+      POSTGRES_PASSWORD: storyteller
+      POSTGRES_DB: storyteller
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U storyteller"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: storyteller-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@storyteller.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_LISTEN_PORT: 5050
+    ports:
+      - "5050:5050"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   minio:
     image: quay.io/minio/minio
@@ -38,3 +74,4 @@ services:
 
 volumes:
   sessions:
+  pgdata:

@@ -53,6 +53,8 @@ from backend.agents.conversation_agent import run_live_conversation
 from backend.agents.edit_conversation_agent import run_edit_conversation
 from backend.agents.edit_agent import plan_edit
 from backend.config import DEV_MODE, DEV_SESSION_ID, DEV_STEPS, session_dir
+from backend.db.database import init_db, SessionLocal
+from backend.db import crud as db_crud
 from backend.pipeline.orchestrator import ProgressEvent, StoryOrchestrator
 from backend.pipeline.state import PipelineStatus, StoryState
 
@@ -67,6 +69,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Storyteller API", version="1.0.0")
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+    logger.info("Database tables created / verified")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -96,6 +105,13 @@ def _get_or_create_session(session_id: str) -> dict[str, Any]:
             "progress_queue": q,
             "task": None,
         }
+        # Persist session row in Postgres
+        try:
+            db = SessionLocal()
+            db_crud.upsert_session(db, session_id, "idle")
+            db.close()
+        except Exception as exc:
+            logger.warning("DB upsert_session failed: %s", exc)
     return _sessions[session_id]
 
 
@@ -365,6 +381,14 @@ async def edit_story(session_id: str, request: EditRequest) -> EditResponse:
     if updated_state.edit_history:
         reasoning = updated_state.edit_history[-1].get("reasoning", "")
 
+    # Record edit in Postgres
+    try:
+        db = SessionLocal()
+        db_crud.record_edit(db, session_id, request.message, reasoning, sorted(dirty_keys))
+        db.close()
+    except Exception as exc:
+        logger.warning("DB record_edit failed: %s", exc)
+
     # Cancel any previous background task
     if session["task"] and not session["task"].done():
         session["task"].cancel()
@@ -611,6 +635,56 @@ async def get_dev_mode() -> JSONResponse:
         "dev_session_id": DEV_SESSION_ID if DEV_MODE else None,
         "dev_steps": sorted(DEV_STEPS) if DEV_MODE else [],
     })
+
+
+# ---------------------------------------------------------------------------
+# Page tracking
+# ---------------------------------------------------------------------------
+
+class TrackPageRequest(BaseModel):
+    page: str                    # LANDING | CONVERSATION | PROCESSING | RESULT
+    session_id: str | None = None
+
+
+@app.post("/api/track")
+async def track_page(request: TrackPageRequest) -> JSONResponse:
+    """Record that a user navigated to a page."""
+    db = SessionLocal()
+    try:
+        row = db_crud.track_page_view(db, request.session_id, request.page)
+        logger.info("Page view: %s → %s", request.session_id or "anonymous", request.page)
+        return JSONResponse({
+            "id": row.id,
+            "session_id": row.session_id,
+            "page": row.page,
+        })
+    finally:
+        db.close()
+
+
+@app.get("/api/track")
+async def get_tracking(session_id: str | None = None) -> JSONResponse:
+    """Get page view history (optionally filtered by session_id)."""
+    db = SessionLocal()
+    try:
+        rows = db_crud.get_page_views(db, session_id)
+        return JSONResponse([
+            {"id": r.id, "session_id": r.session_id, "page": r.page, "created_at": str(r.created_at)}
+            for r in rows
+        ])
+    finally:
+        db.close()
+
+
+@app.get("/api/track/{session_id}/current")
+async def get_current(session_id: str) -> JSONResponse:
+    """Get the current page for a session."""
+    db = SessionLocal()
+    try:
+        page = db_crud.get_current_page(db, session_id)
+        return JSONResponse({"session_id": session_id, "current_page": page})
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------

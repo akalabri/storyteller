@@ -3,7 +3,7 @@ import LandingView from './components/LandingView';
 import ConversationView from './components/ConversationView';
 import ProcessingView from './components/ProcessingView';
 import ResultView from './components/ResultView';
-import { startDevGeneration, getDevMode } from './api/client';
+import { startDevGeneration, getDevMode, trackPage } from './api/client';
 
 // App States: LANDING, CONVERSATION, PROCESSING, RESULT
 function App() {
@@ -37,11 +37,15 @@ function App() {
       .catch(() => {
         setDevMode(false);
       });
+    // Track initial landing page visit
+    trackPage('LANDING', null);
   }, []);
 
   const transitionTo = (newState) => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     setViewState(newState);
+    // Track page navigation (sessionId may be null for early transitions)
+    trackPage(newState, sessionId);
   };
 
   // Called when the user clicks "Generate" on the landing page.
