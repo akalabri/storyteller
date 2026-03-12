@@ -128,6 +128,7 @@ async def run_live_conversation(session_id: str, websocket: WebSocket) -> None:
 
     stop_event = asyncio.Event()
     farewell_requested = asyncio.Event()
+    graceful_end = asyncio.Event()          # set only when conversation ended intentionally
     transcript_log: list[tuple[str, str]] = []
     farewell_timeout_task: list[asyncio.Task | None] = [None]  # mutable cell
 
@@ -136,6 +137,7 @@ async def run_live_conversation(session_id: str, websocket: WebSocket) -> None:
         await asyncio.sleep(8)
         if not stop_event.is_set():
             logger.warning("Farewell timeout — forcing session end")
+            graceful_end.set()
             stop_event.set()
 
     def _start_farewell_timeout() -> None:
@@ -314,6 +316,7 @@ async def run_live_conversation(session_id: str, websocket: WebSocket) -> None:
                                     if _listening_task and not _listening_task.done():
                                         _listening_task.cancel()
                                     _cancel_farewell_timeout()
+                                    graceful_end.set()
                                     stop_event.set()
                                     await _send_json({"type": "state", "value": "processing"})
                                     return
@@ -334,7 +337,12 @@ async def run_live_conversation(session_id: str, websocket: WebSocket) -> None:
                                 break
 
                 except Exception as exc:
-                    logger.error("gemini_to_browser error: %s", exc)
+                    # 1006 = Gemini closed the WS without a close frame;
+                    # expected when the Live session expires or ends naturally.
+                    if "1006" in str(exc):
+                        logger.info("Gemini Live session closed (1006 — normal)")
+                    else:
+                        logger.error("gemini_to_browser error: %s", exc)
                     stop_event.set()
 
             await asyncio.gather(browser_to_gemini(), gemini_to_browser())
@@ -345,9 +353,9 @@ async def run_live_conversation(session_id: str, websocket: WebSocket) -> None:
         return
 
     # ---------------------------------------------------------------------------
-    # Save transcript to session state
+    # Save transcript to session state (only on graceful end)
     # ---------------------------------------------------------------------------
-    if transcript_log:
+    if graceful_end.is_set() and transcript_log:
         full_transcript = _format_transcript(transcript_log)
         state_path = session_dir(session_id) / "story_state.json"
 
@@ -364,4 +372,11 @@ async def run_live_conversation(session_id: str, websocket: WebSocket) -> None:
             len(transcript_log),
         )
 
-    await _send_json({"type": "session_end"})
+    if graceful_end.is_set():
+        await _send_json({"type": "session_end"})
+    else:
+        logger.warning("Session %s ended abnormally (Gemini dropped connection)", session_id)
+        await _send_json({
+            "type": "error",
+            "message": "Voice connection was lost. Please try again.",
+        })

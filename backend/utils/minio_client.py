@@ -1,15 +1,14 @@
 """
-MinIO client helpers for uploading/downloading session artifacts.
-
-Best-effort: failures are logged but never crash the pipeline.
+MinIO client utilities for the storyteller backend.
+Handles uploading session artifacts and generating presigned URLs.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
+import os
 from pathlib import Path
-from datetime import timedelta
+from typing import Optional
 
 from minio import Minio
 from minio.error import S3Error
@@ -22,13 +21,11 @@ from backend.config import (
     MINIO_SECURE,
 )
 
-logger = logging.getLogger(__name__)
-
 # ---------------------------------------------------------------------------
 # Singleton client
 # ---------------------------------------------------------------------------
 
-_client: Minio | None = None
+_client: Optional[Minio] = None
 
 
 def _get_client() -> Minio:
@@ -40,92 +37,109 @@ def _get_client() -> Minio:
             secret_key=MINIO_SECRET_KEY,
             secure=MINIO_SECURE,
         )
-        # Ensure bucket exists
-        try:
-            if not _client.bucket_exists(MINIO_BUCKET):
-                _client.make_bucket(MINIO_BUCKET)
-                logger.info("Created MinIO bucket: %s", MINIO_BUCKET)
-        except Exception as exc:
-            logger.warning("MinIO bucket check failed: %s", exc)
     return _client
 
 
+def _ensure_bucket() -> None:
+    client = _get_client()
+    try:
+        if not client.bucket_exists(MINIO_BUCKET):
+            client.make_bucket(MINIO_BUCKET)
+    except S3Error as exc:
+        raise RuntimeError(f"Failed to ensure MinIO bucket '{MINIO_BUCKET}': {exc}") from exc
+
+
 # ---------------------------------------------------------------------------
-# Helpers
+# Object key helpers
 # ---------------------------------------------------------------------------
 
 def session_object_key(session_id: str, relative_path: str) -> str:
-    return f"sessions/{session_id}/{relative_path}"
+    """Return the MinIO object key for a session artifact."""
+    return f"sessions/{session_id}/{relative_path.lstrip('/')}"
 
 
 def object_exists_sync(object_key: str) -> bool:
+    """Check if an object exists in MinIO (synchronous)."""
     try:
         _get_client().stat_object(MINIO_BUCKET, object_key)
         return True
-    except Exception:
+    except S3Error:
         return False
 
 
 # ---------------------------------------------------------------------------
-# Sync operations (run in executor for async)
+# Upload helpers (async wrappers around synchronous MinIO SDK)
 # ---------------------------------------------------------------------------
 
-def _upload_sync(object_key: str, local_path: str) -> str:
-    client = _get_client()
-    client.fput_object(MINIO_BUCKET, object_key, local_path)
+async def upload_session_artifact(
+    session_id: str,
+    local_path: str,
+    relative_path: str,
+) -> str:
+    """
+    Upload a single file to MinIO under sessions/{session_id}/{relative_path}.
+    Returns the object key.
+    """
+    object_key = session_object_key(session_id, relative_path)
+    path = Path(local_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Cannot upload: file not found: {local_path}")
+
+    def _upload():
+        _ensure_bucket()
+        _get_client().fput_object(
+            MINIO_BUCKET,
+            object_key,
+            str(path),
+        )
+
+    await asyncio.get_event_loop().run_in_executor(None, _upload)
     return object_key
 
 
-def _download_sync(object_key: str, local_path: str) -> str:
-    client = _get_client()
-    client.fget_object(MINIO_BUCKET, object_key, local_path)
-    return local_path
-
-
-def _presigned_sync(object_key: str, expires_hours: int = 6) -> str:
-    client = _get_client()
-    return client.presigned_get_object(
-        MINIO_BUCKET, object_key, expires=timedelta(hours=expires_hours)
-    )
-
-
-# ---------------------------------------------------------------------------
-# Async wrappers
-# ---------------------------------------------------------------------------
-
-async def upload_file(object_key: str, local_path: str) -> str:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _upload_sync, object_key, local_path)
-
-
-async def download_file(object_key: str, local_path: str) -> str:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _download_sync, object_key, local_path)
-
-
-async def presigned_url(object_key: str, expires_hours: int = 6) -> str:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _presigned_sync, object_key, expires_hours)
-
-
-async def upload_session_artifact(
-    session_id: str, local_path: str, relative_path: str | None = None
-) -> str:
-    p = Path(local_path)
-    rel = relative_path or p.name
-    key = session_object_key(session_id, rel)
-    logger.debug("Uploading %s → %s/%s", local_path, MINIO_BUCKET, key)
-    return await upload_file(key, local_path)
-
-
 async def upload_session_directory(
-    session_id: str, local_dir: str, prefix: str
+    session_id: str,
+    local_dir: str,
+    prefix: str,
 ) -> list[str]:
-    keys = []
-    for f in Path(local_dir).iterdir():
-        if f.is_file():
-            key = session_object_key(session_id, f"{prefix}/{f.name}")
-            await upload_file(key, str(f))
-            keys.append(key)
-    return keys
+    """
+    Recursively upload all files in local_dir to MinIO under
+    sessions/{session_id}/{prefix}/...
+    Returns list of uploaded object keys.
+    """
+    base = Path(local_dir)
+    if not base.is_dir():
+        raise NotADirectoryError(f"Not a directory: {local_dir}")
 
+    uploaded: list[str] = []
+
+    def _upload_all():
+        _ensure_bucket()
+        for file_path in base.rglob("*"):
+            if not file_path.is_file():
+                continue
+            rel = file_path.relative_to(base)
+            key = session_object_key(session_id, f"{prefix.rstrip('/')}/{rel}")
+            _get_client().fput_object(MINIO_BUCKET, key, str(file_path))
+            uploaded.append(key)
+
+    await asyncio.get_event_loop().run_in_executor(None, _upload_all)
+    return uploaded
+
+
+# ---------------------------------------------------------------------------
+# Presigned URL (async)
+# ---------------------------------------------------------------------------
+
+async def presigned_url(object_key: str, expires_seconds: int = 3600) -> str:
+    """Generate a presigned GET URL for a MinIO object."""
+    from datetime import timedelta
+
+    def _generate():
+        return _get_client().presigned_get_object(
+            MINIO_BUCKET,
+            object_key,
+            expires=timedelta(seconds=expires_seconds),
+        )
+
+    return await asyncio.get_event_loop().run_in_executor(None, _generate)
