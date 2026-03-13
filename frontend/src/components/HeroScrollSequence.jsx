@@ -106,7 +106,7 @@ const HeroScrollSequence = () => {
             <div className="sticky-canvas-container">
                 <canvas ref={canvasRef} className="hero-canvas"></canvas>
                 <div className="hero-overlay">
-                    <h1 className="hero-title text-gradient">Story Vibe AI from Aflah nnnnnnnnnnn</h1>
+                    <h1 className="hero-title text-gradient">Story Vibe AI from Aflah xxxxxxxxx</h1>
                 </div>
             </div>
         </div>
