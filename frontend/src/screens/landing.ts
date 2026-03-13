@@ -64,6 +64,10 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
           Have a conversation with AI. It listens, understands you,<br/>
           then generates a personalized video story just for you.
         </p>
+        
+        <button class="btn-labs" id="start-btn" aria-label="Start voice conversation">
+          Start Conversation
+        </button>
 
       </div>
       <!-- Floating image thumbnails -->
@@ -82,39 +86,56 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
     <!-- CAROUSEL SECTION -->
     <section class="landing-carousel-section">
       <h2 class="carousel-title">Recent Masterpieces</h2>
-      <div class="carousel-track" id="carousel-track">
-        <!-- Rendered dynamically -->
+      <div class="carousel-wrapper">
+        <button class="carousel-nav-btn carousel-nav-prev" id="carousel-prev" aria-label="Previous">
+          <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div class="carousel-track" id="carousel-track">
+          <!-- Rendered dynamically -->
+        </div>
+        <button class="carousel-nav-btn carousel-nav-next" id="carousel-next" aria-label="Next">
+          <svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
       </div>
     </section>
 
-    <!-- HERO SCROLL SEQUENCE -->
-    <div class="hero-scroll-container" id="hero-scroll-container">
-      <div class="sticky-canvas-container">
-        <canvas id="hero-canvas" class="hero-canvas"></canvas>
-      </div>
-    </div>
-
-    <!-- Sticky Button Wrapper -->
-    <div class="landing-sticky-btn-wrapper">
-      <button class="btn-labs" id="start-btn" aria-label="Start voice conversation">
-        Start Conversation
-      </button>
-    </div>
   `;
+
+  const MOCK_CARDS = [
+    { title: 'The Last Oasis', image: '/assets/landing_page_thumnails/Whisk_34215111e3c2c32b8924c7555820b080dr.jpeg' },
+    { title: 'Whispers of the Forest', image: '/assets/landing_page_thumnails/Whisk_4e5dd3de454e24d9c3f434d5c1027e82dr.jpeg' },
+    { title: 'Storm Rider', image: '/assets/landing_page_thumnails/Whisk_80a9a299b7bede0a0314d6dc6b3717bedr.jpeg' },
+    { title: 'The Forgotten City', image: '/assets/landing_page_thumnails/Whisk_95165b961c53ab9874349fcef3bbe219dr.jpeg' },
+    { title: 'Dragon\'s Ember', image: '/assets/landing_page_thumnails/Whisk_a8f87e565478c5ba6f048160061d948adr.jpeg' },
+  ];
 
   // Render carousel
   function renderCarousel() {
     const track = screen.querySelector<HTMLElement>('#carousel-track');
     if (!track) return;
     track.innerHTML = '';
-    storiesStore.forEach(story => {
+
+    // Use real stories if available, padded/capped to 5; fall back to mock cards
+    let itemsToRender: { title: string; image: string; id?: string }[] = [...storiesStore];
+    if (itemsToRender.length === 0) {
+      itemsToRender = MOCK_CARDS;
+    } else {
+      while (itemsToRender.length < 5) {
+        itemsToRender = [...itemsToRender, ...storiesStore];
+      }
+      itemsToRender = itemsToRender.slice(0, 5);
+    }
+
+    itemsToRender.forEach(story => {
       const card = document.createElement('div');
       card.className = 'carousel-card';
       card.innerHTML = `
-        <img src="${story.image}" alt="${story.title}" />
+        <img src="${story.image}" alt="${story.title}" loading="lazy" />
         <span class="carousel-card-title">${story.title}</span>
       `;
-      card.addEventListener('click', () => onStorySelect(story.id));
+      if (story.id) {
+        card.addEventListener('click', () => onStorySelect(story.id!));
+      }
       track.appendChild(card);
     });
   }
@@ -122,8 +143,18 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
   renderCarousel();
   subscribeToStories(renderCarousel);
 
-  // Setup hero scroll
-  setupHeroScroll(screen);
+  // Carousel nav buttons
+  const prevBtn = screen.querySelector<HTMLButtonElement>('#carousel-prev');
+  const nextBtn = screen.querySelector<HTMLButtonElement>('#carousel-next');
+  const track = screen.querySelector<HTMLElement>('#carousel-track');
+  const scrollAmount = 280;
+
+  prevBtn?.addEventListener('click', () => {
+    track?.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+  });
+  nextBtn?.addEventListener('click', () => {
+    track?.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+  });
 
   const startBtn = screen.querySelector<HTMLButtonElement>('#start-btn');
   startBtn?.addEventListener('click', () => {
@@ -134,75 +165,3 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
   return screen;
 }
 
-// Hero scroll logic
-function setupHeroScroll(screen: HTMLElement) {
-  const FRAME_COUNT = 80;
-  const images: HTMLImageElement[] = [];
-  let loadedCount = 0;
-  const canvas = screen.querySelector<HTMLCanvasElement>('#hero-canvas');
-  const container = screen.querySelector<HTMLElement>('#hero-scroll-container');
-  if (!canvas || !container) return;
-
-  const ctx = canvas.getContext('2d');
-
-  for (let i = 0; i < FRAME_COUNT; i++) {
-    const img = new Image();
-    const num = i.toString().padStart(3, '0');
-    // We try to request the correct frame
-    img.src = `/assets/hero/Elements_gather_and_merge_swirl_af3f3f1d4f_${num}.jpg`;
-    img.onload = () => {
-      loadedCount++;
-      if (i === 0) drawFrame(0);
-      if (loadedCount === FRAME_COUNT) drawFrame(0);
-    };
-    images.push(img);
-  }
-
-  function drawFrame(idx: number) {
-    if (!ctx || !canvas || !images[idx]) return;
-    const img = images[idx];
-    const canvasRatio = canvas.width / canvas.height;
-    const imgRatio = img.width / img.height;
-
-    let dw, dh, ox = 0, oy = 0;
-    if (canvasRatio > imgRatio) {
-      dw = canvas.width;
-      dh = canvas.width / imgRatio;
-      oy = (canvas.height - dh) / 2;
-    } else {
-      dh = canvas.height;
-      dw = canvas.height * imgRatio;
-      ox = (canvas.width - dw) / 2;
-    }
-
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, ox, oy, dw, dh);
-  }
-
-  screen.addEventListener('scroll', () => {
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    // screen is the scrollable element since we fixed the screen
-    const scrollPos = -rect.top + window.innerHeight; // rough math to see inside container
-    const scrollHeight = rect.height;
-    
-    if (scrollPos >= 0 && scrollPos <= scrollHeight + window.innerHeight) {
-      const fraction = scrollPos / (scrollHeight + window.innerHeight);
-      const frameIndex = Math.min(FRAME_COUNT - 1, Math.max(0, Math.floor(fraction * FRAME_COUNT)));
-      drawFrame(frameIndex);
-    }
-  });
-
-  window.addEventListener('resize', () => {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    // initial draw
-    setTimeout(() => drawFrame(0), 100);
-  });
-  
-  // init size
-  setTimeout(() => {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-  }, 0);
-}
