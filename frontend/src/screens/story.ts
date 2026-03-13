@@ -3,8 +3,8 @@
 // ============================================================
 
 import { createLogoHTML } from './landing.js';
-import { saveStory } from '../utils/gallery.js';
 import { attachMotion } from '../utils/motion.js';
+import { getStoryById } from '../utils/store.js';
 import {
   startGeneration,
   getStatus,
@@ -193,144 +193,80 @@ export function createGeneratingScreen(
 
 export function createStoryScreen(
   sessionId: string,
-  onCreateAnother: () => void,
-  onEdit?: (sessionId: string) => void,
-  onGallery?: () => void
+  fromMockStore: boolean,
+  onBack: () => void,
+  onEdit?: (sessionId: string) => void
 ): HTMLElement {
   const screen = document.createElement('div');
   screen.id = 'screen-story';
   screen.className = 'screen';
 
-  // Placeholder content while loading
   screen.innerHTML = `
-    <!-- PINK TOP SECTION -->
-    <section class="story-pink">
-      <nav class="story-nav">
-        ${createLogoHTML(true)}
-        <div class="badge-dark">Your Story Is Ready</div>
-      </nav>
+    <!-- Video Page specific background -->
+    <div class="video-page-bg" style="background-image: url(/assets/background.jpeg);"></div>
+    <div class="video-page-overlay"></div>
 
-      <div class="story-pink-content">
-        <p class="story-pink-meta" id="story-meta"></p>
-        <h1 class="story-pink-title" id="story-title">Loading...</h1>
-      </div>
+    <nav class="video-nav">
+      ${createLogoHTML(false)}
+      <button class="btn-outline back-btn" id="back-btn">← Back to Home</button>
+    </nav>
 
-      <!-- Curved wave into dark -->
-      <div class="story-wave-down" aria-hidden="true">
-        <svg viewBox="0 0 1440 90" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M0,45 C480,90 960,0 1440,45 L1440,90 L0,90 Z" fill="#ede0d4"/>
-        </svg>
-      </div>
-    </section>
-
-    <!-- DARK BOTTOM SECTION -->
-    <section class="story-dark">
-      <!-- Video player -->
-      <div class="story-video-wrapper">
+    <div class="video-content-container">
+      <div class="video-player-section">
         <video
           id="story-video"
-          class="story-video-player"
+          class="video-element"
           controls
           preload="metadata"
-          style="width:100%;border-radius:12px;background:#000;max-height:320px;"
         ></video>
       </div>
-
-      <!-- Summary text -->
-      <p class="story-summary-text" id="story-summary"></p>
-
-      <!-- Character card -->
-      <div class="story-char-card" id="story-char-card" style="display:none;">
-        <div class="story-char-avatar" id="story-char-emoji">🎭</div>
-        <div class="story-char-info">
-          <span class="story-char-name" id="story-char-name"></span>
-          <span class="story-char-role" id="story-char-role"></span>
+      <div class="video-details-section">
+        <div class="badge-ready">Masterpiece</div>
+        <h1 class="video-title" id="story-title">Loading...</h1>
+        <p class="video-desc" id="story-desc"></p>
+        <div class="video-actions" id="video-actions">
+           <!-- Edit button injected here if user-generated -->
         </div>
       </div>
-
-      <!-- Action buttons -->
-      <div class="story-btn-row">
-        <button class="btn-labs-outline" id="edit-story-btn">✏️ Edit Story</button>
-        <button class="btn-labs-outline" id="gallery-btn">🎞️ Gallery</button>
-        <button class="btn-labs-outline" id="create-another-btn">Create Another</button>
-      </div>
-    </section>
+    </div>
   `;
 
-  // Load real state from backend
-  (async () => {
-    try {
-      const state = await getState(sessionId);
-      const breakdown = state?.breakdown ?? {};
-
-      const title: string = breakdown?.title ?? 'Your Story';
-      const summary: string =
-        breakdown?.scenes?.[0]?.narration ?? breakdown?.premise ?? '';
-      const genre: string = breakdown?.genre ?? '';
-      const setting: string = breakdown?.setting ?? '';
-      const mood: string = breakdown?.mood ?? '';
-      const character = breakdown?.characters?.[0];
-
-      // Update pink section
-      const titleEl = screen.querySelector<HTMLElement>('#story-title');
-      if (titleEl) titleEl.textContent = title;
-
-      const metaEl = screen.querySelector<HTMLElement>('#story-meta');
-      if (metaEl) {
-        metaEl.textContent = [genre, setting, mood]
-          .filter(Boolean)
-          .map(s => s.charAt(0).toUpperCase() + s.slice(1))
-          .join(' · ');
+  const titleEl = screen.querySelector<HTMLElement>('#story-title');
+  const descEl = screen.querySelector<HTMLElement>('#story-desc');
+  const videoEl = screen.querySelector<HTMLVideoElement>('#story-video');
+  const actionsEl = screen.querySelector<HTMLElement>('#video-actions');
+  
+  if (fromMockStore) {
+    const story = getStoryById(sessionId);
+    if (story) {
+      if (titleEl) titleEl.textContent = story.title;
+      if (descEl) descEl.textContent = story.desc;
+      if (videoEl) videoEl.src = story.videoUrl;
+      
+      if (story.isUserGenerated && actionsEl && onEdit) {
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn-primary';
+        editBtn.innerHTML = '✏️ Edit Story';
+        editBtn.onclick = () => onEdit(sessionId);
+        actionsEl.appendChild(editBtn);
       }
-
-      // Summary
-      const summaryEl = screen.querySelector<HTMLElement>('#story-summary');
-      if (summaryEl && summary) summaryEl.textContent = summary;
-
-      // Character card
-      if (character) {
-        const charCard = screen.querySelector<HTMLElement>('#story-char-card');
-        if (charCard) charCard.style.display = 'flex';
-        const charName = screen.querySelector<HTMLElement>('#story-char-name');
-        const charRole = screen.querySelector<HTMLElement>('#story-char-role');
-        const charEmoji = screen.querySelector<HTMLElement>('#story-char-emoji');
-        if (charName) charName.textContent = character.name ?? 'Character';
-        if (charRole) charRole.textContent = character.role ?? '';
-        if (charEmoji) charEmoji.textContent = '🎭';
-      }
-
-      // Video player
-      const videoEl = screen.querySelector<HTMLVideoElement>('#story-video');
-      if (videoEl) {
-        videoEl.src = videoUrl(sessionId);
-      }
-
-      // Save to gallery
-      saveStory({
-        id: sessionId,
-        title,
-        summary,
-        genre: genre || 'story',
-        setting: setting || '',
-        mood: mood || '',
-        role: character?.role ?? '',
-        userName: character?.name ?? '',
-        sessionId,
-        createdAt: Date.now(),
-      });
-    } catch (err) {
-      console.error('[StoryScreen] Failed to load state:', err);
     }
-  })();
+  } else {
+    // Legacy fallback
+    (async () => {
+      try {
+        const state = await getState(sessionId);
+        const breakdown = state?.breakdown ?? {};
+        if (titleEl) titleEl.textContent = breakdown.title ?? 'Your Story';
+        if (descEl) descEl.textContent = breakdown.premise ?? '';
+        if (videoEl) videoEl.src = videoUrl(sessionId);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }
 
-  screen.querySelector<HTMLButtonElement>('#create-another-btn')
-    ?.addEventListener('click', onCreateAnother);
-
-  screen.querySelector<HTMLButtonElement>('#edit-story-btn')
-    ?.addEventListener('click', () => onEdit?.(sessionId));
-
-  screen.querySelector<HTMLButtonElement>('#gallery-btn')
-    ?.addEventListener('click', () => onGallery?.());
+  screen.querySelector<HTMLButtonElement>('#back-btn')?.addEventListener('click', onBack);
 
   attachMotion(screen);
   return screen;
