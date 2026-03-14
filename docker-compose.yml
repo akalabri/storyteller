@@ -10,10 +10,19 @@ services:
     volumes:
       # Mount Google service account key (read-only)
       - ./key.json:/app/key.json:ro
-      # Persist story sessions across container restarts
-      - sessions:/app/sessions
+      # Persist story sessions in project folder (./sessions/<session_id>/)
+      - ./sessions:/app/sessions
+      # Mount backend source for auto-reload
+      - ./backend:/app/backend
     ports:
-      - "8001:8000"
+      - "8000:8000"
+    command: ["uv", "run", "python", "-m", "backend.main"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy
@@ -24,10 +33,16 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.frontend
+    volumes:
+      # Mount frontend source for live edits
+      - ./frontend:/app
+      # Keep container node_modules (don't overwrite with host)
+      - /app/node_modules
     ports:
       - "5173:5173"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
   postgres:
     image: postgres:16-alpine
@@ -63,8 +78,8 @@ services:
     image: quay.io/minio/minio
     container_name: minio
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9002:9000"   # API (9000 in use on host → use 9002)
+      - "9003:9001"   # Console
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio1234
@@ -73,5 +88,4 @@ services:
     command: server /data --console-address ":9001"
 
 volumes:
-  sessions:
   pgdata:

@@ -190,6 +190,11 @@ def propagate_dirty_nodes(
                 dirty.add(f"scene_video:{key}")
             dirty.add("final_video")
 
+        elif ntype == "scene_images_for_scene":
+            scene_idx = int(key)
+            _mark_scene_images_and_videos_for_scene(scene_idx)
+            dirty.add("final_video")
+
         elif ntype == "all_scene_images":
             for sk in _all_subscene_keys():
                 dirty.add(f"scene_image:{sk}")
@@ -217,31 +222,33 @@ def dirty_nodes_from_breakdown_diff(
     """
     Compare old and new breakdowns and return the minimal DirtyNode list.
     Called by plan_edit after the LLM has produced an updated_breakdown.
+
+    Per-scene granular: only the scenes that actually changed get their
+    narration and images/videos marked dirty.  The visual_plan is only
+    dirtied when the overall structure changes (scene count or special
+    instructions).
     """
     nodes: list[DirtyNode] = []
 
     if old is None:
-        # Everything is new
         return [DirtyNode(node_type="visual_plan", key="all")]
 
-    # Check story scenes
+    # Structural change — scene count differs → full regen
+    if len(old.story) != len(new.story):
+        nodes.append(DirtyNode(node_type="visual_plan", key="all"))
+        for i in range(1, max(len(old.story), len(new.story)) + 1):
+            nodes.append(DirtyNode(node_type="narration", key=str(i)))
+        return _deduplicate(nodes)
+
+    # Per-scene text diff — only dirty the specific scenes that changed
     for i, (old_scene, new_scene) in enumerate(
         zip(old.story, new.story), start=1
     ):
         if old_scene != new_scene:
             nodes.append(DirtyNode(node_type="narration", key=str(i)))
-            nodes.append(DirtyNode(node_type="visual_plan", key="all"))
-            nodes.append(DirtyNode(node_type="all_scene_images", key="all"))
-            break  # one change triggers full downstream; no need to iterate further
+            nodes.append(DirtyNode(node_type="scene_images_for_scene", key=str(i)))
 
-    # If story scene count changed, also dirty everything
-    if len(old.story) != len(new.story):
-        nodes.append(DirtyNode(node_type="visual_plan", key="all"))
-        nodes.append(DirtyNode(node_type="all_scene_images", key="all"))
-        for i in range(1, max(len(old.story), len(new.story)) + 1):
-            nodes.append(DirtyNode(node_type="narration", key=str(i)))
-
-    # Check characters
+    # Character description changes
     old_chars = {c.name: c.description for c in old.characters_prompts}
     new_chars = {c.name: c.description for c in new.characters_prompts}
     for name, desc in new_chars.items():
@@ -249,11 +256,14 @@ def dirty_nodes_from_breakdown_diff(
             from backend.utils.file_io import safe_filename
             nodes.append(DirtyNode(node_type="character_image", key=safe_filename(name)))
 
-    # Check special_instructions
+    # Special instructions changed → visual plan needs full regen
     if old.special_instructions != new.special_instructions:
         nodes.append(DirtyNode(node_type="visual_plan", key="all"))
 
-    # Deduplicate
+    return _deduplicate(nodes)
+
+
+def _deduplicate(nodes: list[DirtyNode]) -> list[DirtyNode]:
     seen: set[str] = set()
     unique: list[DirtyNode] = []
     for n in nodes:

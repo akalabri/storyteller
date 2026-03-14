@@ -542,7 +542,7 @@ class StoryOrchestrator:
     # -----------------------------------------------------------------------
 
     # Max concurrent image-gen requests to avoid Vertex AI 429 rate limits
-    _SCENE_IMAGE_CONCURRENCY = 2
+    _SCENE_IMAGE_CONCURRENCY = 1
 
     async def _run_scene_images(self, dirty_keys: set[str] | None = None) -> None:
         """
@@ -619,11 +619,14 @@ class StoryOrchestrator:
         await asyncio.gather(*tasks)
 
         if failed_keys:
-            raise RuntimeError(
+            msg = (
                 f"Scene image generation failed for {len(failed_keys)} sub-scene(s): "
                 + ", ".join(failed_keys)
-                + ". Cannot proceed to video generation."
+                + ". Continuing with successfully generated images."
             )
+            logger.warning(msg)
+            self.state.add_error(msg)
+            self._save()
 
     # -----------------------------------------------------------------------
     # Phase 4: scene videos (concurrent, gated on image Events)
@@ -712,11 +715,14 @@ class StoryOrchestrator:
             ])
 
         if failed_keys:
-            raise RuntimeError(
+            msg = (
                 f"Scene video generation failed for {len(failed_keys)} sub-scene(s): "
                 + ", ".join(failed_keys)
-                + ". Cannot proceed to compilation."
+                + ". Continuing to compile with successfully generated videos."
             )
+            logger.warning(msg)
+            self.state.add_error(msg)
+            self._save()
 
     # -----------------------------------------------------------------------
     # Compile
@@ -727,7 +733,9 @@ class StoryOrchestrator:
         assert self.state.visual_plan is not None
 
         self._emit(ProgressEvent("compile", "running"))
-        output_path = self._final_dir() / "story.mp4"
+        version = len(self.state.edit_history) + 1
+        filename = f"story_v{version}.mp4"
+        output_path = self._final_dir() / filename
         try:
             path = await compile_video(
                 breakdown=self.state.breakdown,
@@ -738,7 +746,7 @@ class StoryOrchestrator:
             )
             self.state.final_video_path = path
             self._emit(ProgressEvent("compile", "done", data={"path": path}))
-            await self._upload_to_minio(path, "final/story.mp4")
+            await self._upload_to_minio(path, f"final/{filename}")
         except Exception as exc:
             self.state.add_error(f"compile: {exc}")
             self._emit(ProgressEvent("compile", "failed", message=str(exc)))
