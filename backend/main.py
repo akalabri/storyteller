@@ -42,6 +42,7 @@ from fastapi import (
     BackgroundTasks,
     FastAPI,
     HTTPException,
+    Request,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -69,6 +70,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Storyteller API", version="1.0.0")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return 500 with error detail so the frontend can show a useful message."""
+    logger.exception("Unhandled exception: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc) or "Internal server error"},
+    )
 
 
 @app.on_event("startup")
@@ -174,10 +185,14 @@ async def start_conversation() -> ConversationStartResponse:
     Returns the session_id that the frontend uses for the conversation WebSocket
     and, later, for the generation pipeline.
     """
-    sid = uuid.uuid4().hex
-    _get_or_create_session(sid)
-    logger.info("Conversation session created: %s", sid)
-    return ConversationStartResponse(session_id=sid)
+    try:
+        sid = uuid.uuid4().hex
+        _get_or_create_session(sid)
+        logger.info("Conversation session created: %s", sid)
+        return ConversationStartResponse(session_id=sid)
+    except Exception as exc:
+        logger.exception("start_conversation failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +291,15 @@ async def generate_story(request: GenerateRequest) -> GenerateResponse:
 async def get_status(session_id: str) -> JSONResponse:
     """Return the current pipeline status and step progress."""
     if session_id not in _sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+        # Try loading from disk so a page-refresh doesn't lose the session
+        state_path = session_dir(session_id) / "story_state.json"
+        if state_path.exists():
+            _get_or_create_session(session_id)
+            from backend.pipeline.state import StoryState as _SS
+            saved = _SS.load(state_path)
+            _sessions[session_id]["orchestrator"].state = saved
+        else:
+            raise HTTPException(status_code=404, detail="Session not found")
 
     state: StoryState = _sessions[session_id]["orchestrator"].state
     return JSONResponse({
@@ -296,15 +319,36 @@ async def get_status(session_id: str) -> JSONResponse:
 async def get_state(session_id: str) -> JSONResponse:
     """Return the full StoryState JSON."""
     if session_id not in _sessions:
-        # Try loading from disk
+        # Try loading from disk so a page-refresh doesn't lose the session
         state_path = session_dir(session_id) / "story_state.json"
         if state_path.exists():
-            session = _get_or_create_session(session_id)
+            _get_or_create_session(session_id)
+            from backend.pipeline.state import StoryState as _SS
+            saved = _SS.load(state_path)
+            _sessions[session_id]["orchestrator"].state = saved
         else:
             raise HTTPException(status_code=404, detail="Session not found")
 
     state: StoryState = _sessions[session_id]["orchestrator"].state
-    return JSONResponse(state.to_dict())
+    data = state.to_dict()
+
+    # Inject a derived title and premise for the frontend carousel/story screen.
+    # StoryBreakdown has no explicit title field — derive one from the characters
+    # and the first scene text so the UI always has something meaningful to show.
+    if state.breakdown and "breakdown" in data and data["breakdown"]:
+        bd = data["breakdown"]
+        # Build a short title from character names (e.g. "Laptop & TV")
+        chars = state.breakdown.characters_prompts
+        if chars:
+            names = [c.name for c in chars[:2]]
+            bd["title"] = " & ".join(names) if len(names) > 1 else names[0]
+        else:
+            bd["title"] = "Your Masterpiece"
+        # Use the first scene paragraph as the premise/description
+        if state.breakdown.story:
+            bd["premise"] = state.breakdown.story[0][:160].rstrip() + ("…" if len(state.breakdown.story[0]) > 160 else "")
+
+    return JSONResponse(data)
 
 
 # ---------------------------------------------------------------------------
@@ -313,31 +357,127 @@ async def get_state(session_id: str) -> JSONResponse:
 
 @app.get("/api/story/{session_id}/video", response_model=None)
 async def get_video(session_id: str):
-    """Stream the final compiled MP4 video, or redirect to MinIO presigned URL."""
+    """
+    Return a JSON response with the video URL and version number.
+
+    If the video file exists on disk, the URL points to the local streaming
+    endpoint (/api/story/{session_id}/video/stream).  Otherwise a MinIO
+    presigned URL is returned.
+    """
     if session_id not in _sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
+        # Try loading from disk so a page-refresh doesn't lose the session
+        state_path = session_dir(session_id) / "story_state.json"
+        if state_path.exists():
+            _get_or_create_session(session_id)
+            from backend.pipeline.state import StoryState as _SS
+            saved = _SS.load(state_path)
+            _sessions[session_id]["orchestrator"].state = saved
+        else:
+            raise HTTPException(status_code=404, detail="Session not found")
 
     state: StoryState = _sessions[session_id]["orchestrator"].state
     if not state.final_video_path:
         raise HTTPException(status_code=404, detail="Final video not yet available")
 
-    # Serve from local disk if available
     video_path = Path(state.final_video_path)
+    video_version = len(state.edit_history) + 1
+
+    # If the file is on disk, point to the local streaming endpoint
     if video_path.exists():
-        return FileResponse(
-            path=str(video_path),
-            media_type="video/mp4",
-            filename="story.mp4",
-        )
+        return JSONResponse({
+            "video_url": f"/api/story/{session_id}/video/stream",
+            "version": video_version,
+        })
 
     # Fall back to MinIO presigned URL
     from backend.utils.minio_client import presigned_url, session_object_key, object_exists_sync
     minio_key = session_object_key(session_id, "final/story.mp4")
     if object_exists_sync(minio_key):
         url = await presigned_url(minio_key)
-        return JSONResponse({"video_url": url})
+        return JSONResponse({"video_url": url, "version": video_version})
 
     raise HTTPException(status_code=404, detail="Video file not found")
+
+
+@app.get("/api/story/{session_id}/video/stream", response_model=None)
+async def stream_video(session_id: str):
+    """Serve the compiled MP4 directly as a binary stream."""
+    if session_id not in _sessions:
+        state_path = session_dir(session_id) / "story_state.json"
+        if state_path.exists():
+            _get_or_create_session(session_id)
+            from backend.pipeline.state import StoryState as _SS
+            saved = _SS.load(state_path)
+            _sessions[session_id]["orchestrator"].state = saved
+        else:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+    state: StoryState = _sessions[session_id]["orchestrator"].state
+    if not state.final_video_path:
+        raise HTTPException(status_code=404, detail="Final video not yet available")
+
+    video_path = Path(state.final_video_path)
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found on disk")
+
+    return FileResponse(
+        path=str(video_path),
+        media_type="video/mp4",
+        filename=video_path.name,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/story/{session_id}/thumbnail
+# ---------------------------------------------------------------------------
+
+@app.get("/api/story/{session_id}/thumbnail", response_model=None)
+async def get_thumbnail(session_id: str):
+    """
+    Return a thumbnail image URL for the session.
+
+    Tries scene_1_sub_1.png first, then falls back to the first available
+    scene image.  Serves from local disk when available, otherwise returns
+    a MinIO presigned URL.
+    """
+    if session_id not in _sessions:
+        state_path = session_dir(session_id) / "story_state.json"
+        if state_path.exists():
+            _get_or_create_session(session_id)
+            from backend.pipeline.state import StoryState as _SS
+            saved = _SS.load(state_path)
+            _sessions[session_id]["orchestrator"].state = saved
+        else:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+    state: StoryState = _sessions[session_id]["orchestrator"].state
+
+    # Pick the best available scene image: prefer scene_1_sub_1, then any
+    preferred_keys = ["scene_1_sub_1", "scene_1_sub_2", "scene_1_sub_3"]
+    image_path_str: str | None = None
+    for key in preferred_keys:
+        if key in state.scene_image_paths:
+            image_path_str = state.scene_image_paths[key]
+            break
+    if not image_path_str and state.scene_image_paths:
+        image_path_str = next(iter(state.scene_image_paths.values()))
+
+    if not image_path_str:
+        raise HTTPException(status_code=404, detail="No scene images available yet")
+
+    # Serve from local disk if available
+    img_path = Path(image_path_str)
+    if img_path.exists():
+        return FileResponse(path=str(img_path), media_type="image/png")
+
+    # Fall back to MinIO
+    from backend.utils.minio_client import presigned_url, session_object_key, object_exists_sync
+    minio_key = session_object_key(session_id, f"scenes/{img_path.name}")
+    if object_exists_sync(minio_key):
+        url = await presigned_url(minio_key)
+        return JSONResponse({"thumbnail_url": url})
+
+    raise HTTPException(status_code=404, detail="Thumbnail image not found")
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +553,107 @@ async def edit_story(session_id: str, request: EditRequest) -> EditResponse:
 
 
 # ---------------------------------------------------------------------------
+# POST /api/story/{session_id}/retry
+# ---------------------------------------------------------------------------
+
+@app.post("/api/story/{session_id}/retry", response_model=GenerateResponse)
+async def retry_failed_scenes(session_id: str) -> GenerateResponse:
+    """
+    Re-run only the failed or skipped steps from the last pipeline run.
+
+    Already-completed steps (scene images, videos, narration, etc.) are
+    not regenerated — the orchestrator's skip-if-exists guard ensures that
+    any file already on disk is reused.  Only steps whose status is
+    'failed' or 'skipped' are retried, plus the final compile if the video
+    is missing.
+    """
+    if session_id not in _sessions:
+        # Try loading from disk so a page-refresh doesn't lose the session
+        state_path = session_dir(session_id) / "story_state.json"
+        if state_path.exists():
+            _get_or_create_session(session_id)
+            from backend.pipeline.state import StoryState as _SS
+            saved = _SS.load(state_path)
+            _sessions[session_id]["orchestrator"].state = saved
+        else:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _sessions[session_id]
+    orch: StoryOrchestrator = session["orchestrator"]
+
+    if orch.state.status == PipelineStatus.RUNNING:
+        raise HTTPException(
+            status_code=409, detail="Pipeline is still running. Wait for it to finish."
+        )
+
+    # Derive dirty_keys from steps that failed or were skipped
+    dirty_keys: set[str] = {
+        s.step for s in orch.state.steps
+        if s.status in ("failed", "skipped")
+    }
+
+    # Always include compile if the final video is missing
+    if not orch.state.final_video_path:
+        dirty_keys.add("final_video")
+
+    if not dirty_keys:
+        raise HTTPException(status_code=400, detail="No failed or skipped steps to retry.")
+
+    # Clear previous errors so the UI shows a clean state
+    orch.state.errors = []
+
+    # Cancel any previous background task
+    if session["task"] and not session["task"].done():
+        session["task"].cancel()
+
+    async def _run_retry():
+        await orch.run_selective(dirty_keys)
+
+    session["task"] = asyncio.create_task(_run_retry())
+    logger.info(
+        "Retry started for session %s. Retrying %d key(s): %s",
+        session_id,
+        len(dirty_keys),
+        sorted(dirty_keys),
+    )
+    return GenerateResponse(session_id=session_id)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/story/{session_id}/recompile
+# ---------------------------------------------------------------------------
+
+@app.post("/api/story/{session_id}/recompile", response_model=GenerateResponse)
+async def recompile_video(session_id: str) -> GenerateResponse:
+    """Re-run only the compile step (ffmpeg assembly) without regenerating any assets."""
+    if session_id not in _sessions:
+        state_path = session_dir(session_id) / "story_state.json"
+        if state_path.exists():
+            _get_or_create_session(session_id)
+            from backend.pipeline.state import StoryState as _SS
+            saved = _SS.load(state_path)
+            _sessions[session_id]["orchestrator"].state = saved
+        else:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+    session = _sessions[session_id]
+    orch: StoryOrchestrator = session["orchestrator"]
+
+    if orch.state.status == PipelineStatus.RUNNING:
+        raise HTTPException(status_code=409, detail="Pipeline is still running.")
+
+    if session["task"] and not session["task"].done():
+        session["task"].cancel()
+
+    async def _run_recompile():
+        await orch.run_selective({"final_video"})
+
+    session["task"] = asyncio.create_task(_run_recompile())
+    logger.info("Recompile started for session %s", session_id)
+    return GenerateResponse(session_id=session_id)
+
+
+# ---------------------------------------------------------------------------
 # POST /api/edit-conversation/start
 # ---------------------------------------------------------------------------
 
@@ -477,12 +718,13 @@ async def edit_from_transcript(
 ) -> EditFromTranscriptResponse:
     """
     Process an edit conversation transcript through plan_edit and kick off
-    selective regeneration.
+    selective regeneration on a **cloned** session so the original is preserved.
 
-    The transcript can be supplied in the request body, or omitted to use the
-    saved edit_conversation_transcript from the session's StoryState.
+    Returns the new clone's session_id so the frontend navigates to it.
     """
-    # Ensure session is loaded
+    import shutil
+
+    # Ensure original session is loaded
     state_path = session_dir(session_id) / "story_state.json"
     if session_id not in _sessions:
         if state_path.exists():
@@ -490,61 +732,102 @@ async def edit_from_transcript(
         else:
             raise HTTPException(status_code=404, detail="Session not found")
 
-    # Always reload from disk so we pick up the edit_conversation_transcript
-    # that was written by the edit conversation agent after the WS session ended.
+    # Reload from disk to pick up edit_conversation_transcript
     if state_path.exists():
         from backend.pipeline.state import StoryState as _SS
         saved = _SS.load(state_path)
         _sessions[session_id]["orchestrator"].state = saved
 
-    session = _sessions[session_id]
-    orch: StoryOrchestrator = session["orchestrator"]
-    state = orch.state
+    orig_state = _sessions[session_id]["orchestrator"].state
 
-    if state.status == PipelineStatus.RUNNING:
+    if orig_state.status == PipelineStatus.RUNNING:
         raise HTTPException(
             status_code=409, detail="Pipeline is still running. Wait for it to finish."
         )
 
-    if state.breakdown is None:
+    if orig_state.breakdown is None:
         raise HTTPException(
             status_code=400, detail="Story has not been generated yet."
         )
 
     # Resolve transcript
-    transcript = request.transcript or state.edit_conversation_transcript
+    transcript = request.transcript or orig_state.edit_conversation_transcript
     if not transcript:
         raise HTTPException(
             status_code=400,
             detail="No edit transcript available. Complete an edit conversation first.",
         )
 
-    # Plan the edit using the full conversation transcript as the edit message
-    updated_state, dirty_keys = await plan_edit(transcript, state)
+    # --- Clone the session directory so the original is preserved ---
+    version = len(orig_state.edit_history) + 2  # v2 for first edit, v3 for second, etc.
+    clone_id = f"{session_id}_v{version}"
+    orig_dir = session_dir(session_id)
+    clone_dir = orig_dir.parent / clone_id
 
-    orch.state = updated_state
-    orch._save()
+    if clone_dir.exists():
+        shutil.rmtree(clone_dir)
+    shutil.copytree(str(orig_dir), str(clone_dir))
+    logger.info("Cloned session %s → %s", session_id, clone_id)
+
+    # Create orchestrator for the clone and update its session_id + file paths
+    clone_session = _get_or_create_session(clone_id)
+    clone_orch: StoryOrchestrator = clone_session["orchestrator"]
+    clone_state_path = session_dir(clone_id) / "story_state.json"
+    if clone_state_path.exists():
+        from backend.pipeline.state import StoryState as _SS
+        clone_state = _SS.load(clone_state_path)
+        clone_state.session_id = clone_id
+
+        # Rewrite absolute paths so they point to the clone directory
+        orig_id_segment = f"/{session_id}/"
+        clone_id_segment = f"/{clone_id}/"
+        def _rewrite(p: str) -> str:
+            return p.replace(orig_id_segment, clone_id_segment) if p else p
+        clone_state.narration_paths = {k: _rewrite(v) for k, v in clone_state.narration_paths.items()}
+        clone_state.character_image_paths = {k: _rewrite(v) for k, v in clone_state.character_image_paths.items()}
+        clone_state.scene_image_paths = {k: _rewrite(v) for k, v in clone_state.scene_image_paths.items()}
+        clone_state.scene_video_paths = {k: _rewrite(v) for k, v in clone_state.scene_video_paths.items()}
+        if clone_state.final_video_path:
+            clone_state.final_video_path = _rewrite(clone_state.final_video_path)
+
+        clone_orch.state = clone_state
+
+    # Plan the edit on the clone
+    updated_state, dirty_keys = await plan_edit(transcript, clone_orch.state)
+
+    clone_orch.state = updated_state
+    clone_orch.state.session_id = clone_id
+    clone_orch._save()
 
     reasoning = ""
     if updated_state.edit_history:
         reasoning = updated_state.edit_history[-1].get("reasoning", "")
 
-    if session["task"] and not session["task"].done():
-        session["task"].cancel()
+    # Record edit in Postgres
+    try:
+        db = SessionLocal()
+        db_crud.record_edit(db, clone_id, transcript[:500], reasoning, sorted(dirty_keys))
+        db.close()
+    except Exception as exc:
+        logger.warning("DB record_edit failed: %s", exc)
+
+    if clone_session["task"] and not clone_session["task"].done():
+        clone_session["task"].cancel()
 
     async def _run_edit():
-        await orch.run_selective(dirty_keys)
+        await clone_orch.run_selective(dirty_keys)
 
-    session["task"] = asyncio.create_task(_run_edit())
+    clone_session["task"] = asyncio.create_task(_run_edit())
     logger.info(
-        "Edit-from-transcript started for session %s. Dirty keys (%d): %s",
+        "Edit-from-transcript started for clone %s (from %s). Dirty keys (%d): %s",
+        clone_id,
         session_id,
         len(dirty_keys),
         sorted(dirty_keys),
     )
 
     return EditFromTranscriptResponse(
-        session_id=session_id,
+        session_id=clone_id,
         dirty_keys=sorted(dirty_keys),
         reasoning=reasoning,
     )
