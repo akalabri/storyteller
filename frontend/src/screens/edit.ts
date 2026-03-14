@@ -1,36 +1,47 @@
 // ============================================================
-// Edit Screen — text input + real backend API
+// Screen 5: Edit Conversation — voice-based story editing
+// Same audio bridge as conversation.ts but uses /ws/edit-conversation
 // ============================================================
 
 import { createLogoHTML } from './landing.js';
 import { attachMotion } from '../utils/motion.js';
-import { submitEdit, openProgressSocket } from '../utils/api.js';
+import { openConversation, type ConvSocket } from '../utils/audio-bridge.js';
+import { editFromTranscript } from '../utils/api.js';
 
 interface EditRefs {
   orb: HTMLElement;
   waveBars: HTMLElement;
   statusLabel: HTMLElement;
   transcript: HTMLElement;
-  applyBtn: HTMLButtonElement;
-  textInput: HTMLInputElement;
+  finishBtn: HTMLButtonElement;
+  sessionLabel: HTMLElement;
 }
 
 let refs: EditRefs;
 let onApplyCb: ((sessionId: string) => void) | null = null;
+let editSocket: ConvSocket | null = null;
 let currentSessionId = '';
-let applying = false;
 
-// ---------- Helpers ----------
+// ---- Helpers ----
 
-function setOrbState(mode: 'thinking' | 'idle') {
+function setOrbState(mode: 'speaking' | 'listening' | 'processing' | 'idle') {
   refs.orb.classList.remove('speaking', 'listening');
   refs.waveBars.classList.remove('speaking');
-  if (mode === 'thinking') {
+  if (mode === 'speaking') {
     refs.orb.classList.add('speaking');
     refs.waveBars.classList.add('speaking');
-    refs.statusLabel.textContent = 'Applying changes...';
+    refs.statusLabel.textContent = 'AI is speaking...';
+    console.log('[EditConversation] State: AI speaking');
+  } else if (mode === 'listening') {
+    refs.orb.classList.add('listening');
+    refs.statusLabel.textContent = 'Describe your changes';
+    console.log('[EditConversation] State: listening');
+  } else if (mode === 'processing') {
+    refs.statusLabel.textContent = 'Processing...';
+    console.log('[EditConversation] State: processing');
   } else {
     refs.statusLabel.textContent = '';
+    console.log('[EditConversation] State: idle');
   }
 }
 
@@ -42,64 +53,90 @@ function addMessage(text: string, sender: 'ai' | 'user') {
   refs.transcript.scrollTop = refs.transcript.scrollHeight;
 }
 
-// ---------- Apply handler ----------
+// ---- Start edit conversation ----
 
-async function handleApply() {
-  if (applying) return;
-  const text = refs.textInput.value.trim();
-  if (!text) {
-    refs.textInput.focus();
-    return;
-  }
-
-  applying = true;
-  refs.applyBtn.disabled = true;
-  refs.textInput.disabled = true;
-  addMessage(text, 'user');
-  refs.textInput.value = '';
-  setOrbState('thinking');
+export async function startEditConversation() {
+  refs.statusLabel.textContent = 'Connecting...';
+  refs.finishBtn.classList.remove('visible');
+  refs.finishBtn.disabled = false;
 
   try {
-    // 1. Submit edit to backend
-    const response = await submitEdit(currentSessionId, text);
-    addMessage(response.reasoning || 'Got it — regenerating your story...', 'ai');
-
-    // 2. Open progress WS to track regeneration
-    const closeWs = openProgressSocket(
+    console.log('[EditConversation] Opening edit WS for session:', currentSessionId);
+    editSocket = await openConversation(
       currentSessionId,
-      (event) => {
-        if (event.step === 'pipeline' && event.status === 'done') {
-          closeWs();
-          setOrbState('idle');
-          onApplyCb?.(currentSessionId);
-        }
-        if (event.type === 'error' || event.status === 'error') {
-          closeWs();
-          setOrbState('idle');
-          addMessage(`Error: ${event.message ?? 'Regeneration failed'}`, 'ai');
-          refs.applyBtn.disabled = false;
-          refs.textInput.disabled = false;
-          applying = false;
+      (state) => setOrbState(state),
+      (speaker, text) => {
+        console.log(`[EditConversation] Transcript [${speaker}]: ${text}`);
+        addMessage(text, speaker);
+      },
+      async () => {
+        // session_end received — submit edit from transcript then navigate
+        console.log('[EditConversation] session_end received, calling editFromTranscript');
+        setOrbState('processing');
+        refs.statusLabel.textContent = 'Submitting edit...';
+        refs.finishBtn.disabled = true;
+        try {
+          const editResult = await editFromTranscript(currentSessionId);
+          const newSessionId = editResult.session_id;
+          console.log('[EditConversation] editFromTranscript submitted, clone session:', newSessionId);
+          onApplyCb?.(newSessionId);
+        } catch (err: any) {
+          console.error('[EditConversation] editFromTranscript failed:', err);
+          addMessage(`Error submitting edit: ${err?.message ?? err}`, 'ai');
+          refs.statusLabel.textContent = 'Edit submission failed';
+          refs.finishBtn.disabled = false;
         }
       },
-      () => {
-        // WS closed without pipeline done — call complete anyway
-        if (applying) {
-          setOrbState('idle');
-          onApplyCb?.(currentSessionId);
-        }
-      }
+      (msg) => {
+        console.error('[EditConversation] Error:', msg);
+        addMessage(`Error: ${msg}`, 'ai');
+        setOrbState('idle');
+        refs.statusLabel.textContent = 'Connection lost';
+        refs.finishBtn.disabled = false;
+        refs.finishBtn.textContent = '↻ Retry';
+        refs.finishBtn.onclick = () => {
+          resetEditConversation();
+          void startEditConversation();
+        };
+      },
+      `/ws/edit-conversation/${currentSessionId}`,
     );
+
+    refs.statusLabel.textContent = 'Connected — describe your changes';
+    refs.finishBtn.classList.add('visible');
+    setOrbState('listening');
+    console.log('[EditConversation] WebSocket connected');
   } catch (err: any) {
-    setOrbState('idle');
-    addMessage(`Error: ${err?.message ?? err}`, 'ai');
-    refs.applyBtn.disabled = false;
-    refs.textInput.disabled = false;
-    applying = false;
+    console.error('[EditConversation] Failed to connect:', err);
+    refs.statusLabel.textContent = 'Connection failed';
+    addMessage(`Could not connect: ${err?.message ?? err}`, 'ai');
+    refs.finishBtn.classList.add('visible');
+    refs.finishBtn.textContent = '↻ Retry';
+    refs.finishBtn.disabled = false;
+    refs.finishBtn.onclick = () => {
+      resetEditConversation();
+      void startEditConversation();
+    };
   }
 }
 
-// ---------- Create Screen ----------
+export function resetEditConversation() {
+  console.log('[EditConversation] Resetting');
+  editSocket?.close();
+  editSocket = null;
+
+  if (refs?.transcript) refs.transcript.innerHTML = '';
+  if (refs?.finishBtn) {
+    refs.finishBtn.classList.remove('visible');
+    refs.finishBtn.disabled = false;
+    refs.finishBtn.textContent = '✓ Finish editing';
+    refs.finishBtn.onclick = null;
+  }
+  if (refs?.statusLabel) refs.statusLabel.textContent = '';
+  if (refs?.sessionLabel) refs.sessionLabel.textContent = '';
+}
+
+// ---- Create Screen ----
 
 export function createEditScreen(
   sessionId: string,
@@ -107,7 +144,6 @@ export function createEditScreen(
 ): HTMLElement {
   currentSessionId = sessionId;
   onApplyCb = onApply;
-  applying = false;
 
   const screen = document.createElement('div');
   screen.id = 'screen-edit';
@@ -118,7 +154,7 @@ export function createEditScreen(
     <section class="conv-pink">
       <nav class="conv-nav">
         ${createLogoHTML(true)}
-        <div class="badge-dark">Edit Story</div>
+        <span class="conv-session-label" id="edit-session-label"></span>
       </nav>
 
       <!-- AI Orb -->
@@ -145,35 +181,17 @@ export function createEditScreen(
 
     <!-- DARK BOTTOM SECTION -->
     <section class="conv-dark">
-      <!-- Current story context chip -->
       <div class="edit-context-chip">
-        <span class="edit-context-label">CURRENT STORY</span>
+        <span class="edit-context-label">EDITING STORY</span>
         <span class="edit-context-meta">Session: ${sessionId.slice(0, 8)}</span>
       </div>
 
-      <p class="conv-question" style="opacity:0.7;margin-bottom:0.5rem;">
-        Describe what you'd like to change about your story.
-      </p>
-
-      <!-- Transcript (shows reasoning from backend) -->
+      <!-- Transcript (live from AI) -->
       <div class="conv-transcript" id="edit-transcript" role="log" aria-live="polite"></div>
 
-      <!-- Text input -->
-      <div class="conv-input-row" id="edit-input-row" style="display:flex;">
-        <input
-          class="conv-text-input"
-          id="edit-text-input"
-          type="text"
-          placeholder="e.g. Make the character a detective in Victorian London..."
-          autocomplete="off"
-          spellcheck="false"
-          aria-label="Describe your edit"
-        />
-      </div>
-
-      <!-- Apply button -->
+      <!-- Finish button -->
       <div class="conv-controls">
-        <button class="finish-btn visible" id="edit-apply-btn">✓ Apply Changes &amp; Regenerate</button>
+        <button class="finish-btn" id="edit-finish-btn">✓ Finish editing</button>
       </div>
     </section>
   `;
@@ -183,13 +201,20 @@ export function createEditScreen(
     waveBars: screen.querySelector('#edit-wave-bars') as HTMLElement,
     statusLabel: screen.querySelector('#edit-status') as HTMLElement,
     transcript: screen.querySelector('#edit-transcript') as HTMLElement,
-    applyBtn: screen.querySelector('#edit-apply-btn') as HTMLButtonElement,
-    textInput: screen.querySelector('#edit-text-input') as HTMLInputElement,
+    finishBtn: screen.querySelector('#edit-finish-btn') as HTMLButtonElement,
+    sessionLabel: screen.querySelector('#edit-session-label') as HTMLElement,
   };
 
-  refs.applyBtn.addEventListener('click', () => void handleApply());
-  refs.textInput.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Enter') void handleApply();
+  refs.sessionLabel.textContent = `Session: ${sessionId.slice(0, 8)}`;
+
+  refs.finishBtn.addEventListener('click', () => {
+    if (editSocket) {
+      console.log('[EditConversation] User clicked Finish Editing — sending end_session');
+      setOrbState('processing');
+      refs.statusLabel.textContent = 'Wrapping up...';
+      refs.finishBtn.disabled = true;
+      editSocket.sendEndSession();
+    }
   });
 
   attachMotion(screen);
