@@ -1,5 +1,5 @@
 /* ============================================================
-   AI Stories Lab — Global Styles
+   Vibe Story Lab — Global Styles
    Google Labs aesthetic: dark, minimal, beautiful
    ============================================================ */
 
@@ -538,24 +538,24 @@ body {
 .carousel-nav-next { right: 4px; }
 
 .carousel-card {
-  min-width: 240px;
-  width: 240px;
-  height: 340px;
-  border-radius: 18px;
-  background: #fff;
+  min-width: 220px;
+  width: 220px;
+  height: 310px;
+  border-radius: 16px;
+  background: #1a1a1a;
   scroll-snap-align: start;
   flex-shrink: 0;
   position: relative;
   overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
-  border: 1px solid rgba(255,255,255,0.7);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.32);
+  border: 1px solid rgba(255,255,255,0.1);
   cursor: pointer;
-  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  transition: transform 0.28s cubic-bezier(0.4,0,0.2,1), box-shadow 0.28s cubic-bezier(0.4,0,0.2,1);
 }
 
 .carousel-card:hover {
-  transform: translateY(-8px) scale(1.02);
-  box-shadow: 0 20px 48px rgba(0,0,0,0.28);
+  transform: translateY(-6px) scale(1.025);
+  box-shadow: 0 22px 52px rgba(0,0,0,0.42);
 }
 
 .carousel-card img {
@@ -564,13 +564,12 @@ body {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 1;
-  transition: opacity 0.3s, transform 0.3s;
+  transition: transform 0.4s cubic-bezier(0.4,0,0.2,1);
+  display: block;
 }
 
 .carousel-card:hover img {
-  opacity: 1;
-  transform: scale(1.04);
+  transform: scale(1.06);
 }
 
 .carousel-card-title {
@@ -578,19 +577,44 @@ body {
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 36px 16px 16px;
-  background: linear-gradient(to top, rgba(0,0,0,0.72) 0%, transparent 100%);
+  padding: 48px 14px 14px;
+  background: linear-gradient(
+    to top,
+    rgba(0,0,0,0.82) 0%,
+    rgba(0,0,0,0.45) 50%,
+    transparent 100%
+  );
   color: #FFFFFF;
-  font-weight: 700;
-  font-size: 15px;
-  line-height: 1.3;
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
   pointer-events: none;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.6);
 }
 
 /* Make dark content sit above orbs */
 .landing-dark-content > *:not(.landing-orbs) {
   position: relative;
   z-index: 2;
+}
+
+/* ---- Carousel empty state ---- */
+.carousel-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 320px;
+  padding: 40px 24px;
+}
+
+.carousel-empty-text {
+  color: rgba(255,255,255,0.4);
+  font-size: 14px;
+  text-align: center;
+  font-style: italic;
+  max-width: 320px;
+  line-height: 1.6;
 }
 
 /* ============================================================
@@ -1087,6 +1111,60 @@ body {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: rgb(0 0 0);
+}
+
+/* ---- Step list (generating screen) ---- */
+.gen-step-list {
+  list-style: none;
+  width: 100%;
+  max-width: 400px;
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gen-step-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  background: rgba(0,0,0,0.08);
+  transition: background 0.2s;
+}
+
+.gen-step-icon {
+  font-size: 14px;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.gen-step-name {
+  flex: 1;
+  font-weight: 500;
+  color: rgba(0,0,0,0.75);
+}
+
+.gen-step-msg {
+  font-size: 11px;
+  color: rgba(0,0,0,0.45);
+}
+
+.gen-step-item.step-done .gen-step-icon { color: #34c759; }
+.gen-step-item.step-done { background: rgba(52,199,89,0.08); }
+.gen-step-item.step-running .gen-step-icon { color: #007aff; animation: spin 1s linear infinite; }
+.gen-step-item.step-running { background: rgba(0,122,255,0.08); }
+.gen-step-item.step-failed .gen-step-icon { color: #ff3b30; }
+.gen-step-item.step-failed { background: rgba(255,59,48,0.08); }
+.gen-step-item.step-skipped { opacity: 0.45; }
+.gen-step-item.step-pending { opacity: 0.5; }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .gen-summary-card {
@@ -1905,9 +1983,9 @@ body {
 .video-page-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(15, 15, 18, 0.85);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(8, 8, 10, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   z-index: 1;
 }
 .video-nav {
@@ -1916,68 +1994,95 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 30px 50px;
+  padding: 24px 40px;
 }
 .back-btn {
-  height: 48px;
-  font-size: 15px;
+  height: 44px;
+  font-size: 14px;
   border-radius: 99px;
   backdrop-filter: blur(10px);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255,255,255,0.15);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 .back-btn:hover {
-  background: rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.15);
   transform: translateY(-2px);
 }
+
+/* Two-column layout: portrait video left, details right */
 .video-content-container {
   position: relative;
   z-index: 10;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  padding: 40px 20px;
-  gap: 40px;
-  max-width: 1200px;
+  padding: 20px 60px 40px;
+  gap: 52px;
+  max-width: 1100px;
   margin: 0 auto;
+  min-height: calc(100vh - 92px);
 }
+
+/* Portrait video column */
 .video-player-section {
-  width: 100%;
-  max-width: 900px;
-  border-radius: 24px;
+  flex-shrink: 0;
+  width: 320px;
+  border-radius: 20px;
   overflow: hidden;
-  box-shadow: 0 30px 60px rgba(0,0,0,0.6);
-  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.08);
 }
 .video-element {
   width: 100%;
   display: block;
   background: #000;
-  aspect-ratio: 16/9;
+  aspect-ratio: 9/16;
 }
+
+/* Details column */
 .video-details-section {
-  text-align: center;
-  max-width: 700px;
+  flex: 1;
+  text-align: left;
+  max-width: 480px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 16px;
+  align-items: flex-start;
+  gap: 18px;
 }
 .video-title {
-  font-size: 42px;
+  font-size: 38px;
   font-weight: 800;
   color: #fff;
   line-height: 1.1;
-  text-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  text-shadow: 0 2px 12px rgba(0,0,0,0.6);
 }
 .video-desc {
-  font-size: 18px;
-  color: rgba(255,255,255,0.7);
-  line-height: 1.6;
+  font-size: 16px;
+  color: rgba(255,255,255,0.72);
+  line-height: 1.65;
 }
-.video-actions { margin-top: 10px; }
+.video-actions { margin-top: 8px; }
+
+/* Stack on small screens */
+@media (max-width: 720px) {
+  .video-content-container {
+    flex-direction: column;
+    padding: 16px 20px 40px;
+    gap: 28px;
+    min-height: unset;
+  }
+  .video-player-section {
+    width: min(320px, 85vw);
+  }
+  .video-details-section {
+    text-align: center;
+    align-items: center;
+    max-width: 100%;
+  }
+  .video-title { font-size: 28px; }
+}
 
 /* ============================================================
    Generation Queue — floating bottom-right 9:16 portrait cards
