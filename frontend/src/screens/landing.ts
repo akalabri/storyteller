@@ -120,9 +120,17 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
     storiesStore.forEach(story => {
       const card = document.createElement('div');
       card.className = 'carousel-card';
+      const versionBadge = story.version != null
+        ? `<span class="carousel-card-version">v${story.version}</span>`
+        : '';
       card.innerHTML = `
         <img src="${story.image}" alt="${story.title}" loading="lazy" />
-        <span class="carousel-card-title">${story.title}</span>
+        <div class="carousel-card-overlay">
+          <div class="carousel-card-meta">
+            ${versionBadge}
+            <span class="carousel-card-title">${story.title}</span>
+          </div>
+        </div>
       `;
       card.addEventListener('click', () => {
         console.log('[Landing] Story card clicked:', story.id);
