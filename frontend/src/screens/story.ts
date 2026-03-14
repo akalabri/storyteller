@@ -1,34 +1,57 @@
 // ============================================================
-// Screen 3: Generating + Screen 4: Story Ready — real backend
+// Screen 3: Generating + Screen 4: Story Ready
 // ============================================================
 
 import { createLogoHTML } from './landing.js';
 import { attachMotion } from '../utils/motion.js';
-import { getStoryById } from '../utils/store.js';
 import {
   startGeneration,
   getStatus,
   getState,
-  videoUrl,
-  openProgressSocket,
+  getVideo,
+  retryFailedScenes,
+  recompileVideo,
+  type StepStatus,
 } from '../utils/api.js';
 
 // ============================================================
-// Step label map
+// Step display helpers
 // ============================================================
 
 const STEP_LABELS: Record<string, string> = {
-  story_breakdown: 'Analyzing your story...',
-  narration: 'Generating narration...',
-  character_images: 'Creating characters...',
-  scene_prompts: 'Planning scenes...',
-  scene_images: 'Generating images...',
-  scene_videos: 'Generating videos...',
-  compile: 'Compiling final video...',
+  story_breakdown: 'Analyzing your story',
+  visual_plan: 'Planning visual scenes',
+  compile: 'Compiling final video',
 };
 
-const STEP_ORDER = Object.keys(STEP_LABELS);
-const STEP_PCT = 100 / STEP_ORDER.length;
+function stepLabel(step: string): string {
+  if (STEP_LABELS[step]) return STEP_LABELS[step];
+  if (step.startsWith('narration:')) return `Narration (scene ${step.split(':')[1]})`;
+  if (step.startsWith('character:')) return `Character: ${step.split(':')[1]}`;
+  if (step.startsWith('scene_image:')) return `Scene image: ${step.split(':').slice(1).join(':')}`;
+  if (step.startsWith('scene_video:')) return `Scene video: ${step.split(':').slice(1).join(':')}`;
+  return step;
+}
+
+function stepIcon(status: StepStatus['status']): string {
+  switch (status) {
+    case 'done':    return '✓';
+    case 'running': return '⟳';
+    case 'failed':  return '✗';
+    case 'skipped': return '–';
+    default:        return '○';
+  }
+}
+
+function stepClass(status: StepStatus['status']): string {
+  switch (status) {
+    case 'done':    return 'step-done';
+    case 'running': return 'step-running';
+    case 'failed':  return 'step-failed';
+    case 'skipped': return 'step-skipped';
+    default:        return 'step-pending';
+  }
+}
 
 // ============================================================
 // SCREEN 3 — Generating
@@ -36,7 +59,8 @@ const STEP_PCT = 100 / STEP_ORDER.length;
 
 export function createGeneratingScreen(
   sessionId: string,
-  onComplete: (sessionId: string) => void
+  onComplete: (sessionId: string) => void,
+  skipGenerate = false,
 ): HTMLElement {
   const screen = document.createElement('div');
   screen.id = 'screen-generating';
@@ -82,6 +106,9 @@ export function createGeneratingScreen(
         <p class="gen-progress-label" id="gen-progress-label">Starting...</p>
       </div>
 
+      <!-- Step list -->
+      <ul class="gen-step-list" id="gen-step-list" aria-live="polite"></ul>
+
       <!-- Error message -->
       <p class="gen-error-msg" id="gen-error" style="display:none;color:#ff6b6b;text-align:center;margin-top:1rem;"></p>
     </section>
@@ -89,120 +116,151 @@ export function createGeneratingScreen(
 
   const progressFill = screen.querySelector<HTMLElement>('#gen-progress');
   const progressLabel = screen.querySelector<HTMLElement>('#gen-progress-label');
+  const stepListEl = screen.querySelector<HTMLElement>('#gen-step-list');
   const errorEl = screen.querySelector<HTMLElement>('#gen-error');
 
-  let stepsCompleted = 0;
   let completed = false;
   let pollInterval: ReturnType<typeof setInterval> | null = null;
-  let closeWs: (() => void) | null = null;
 
   function setProgress(pct: number, label: string) {
     if (progressFill) progressFill.style.width = `${Math.min(pct, 100)}%`;
     if (progressLabel) progressLabel.textContent = label;
   }
 
+  function renderSteps(steps: StepStatus[]) {
+    if (!stepListEl) return;
+    stepListEl.innerHTML = '';
+    steps.forEach(s => {
+      const li = document.createElement('li');
+      li.className = `gen-step-item ${stepClass(s.status)}`;
+      li.innerHTML = `
+        <span class="gen-step-icon">${stepIcon(s.status)}</span>
+        <span class="gen-step-name">${stepLabel(s.step)}</span>
+        ${s.message ? `<span class="gen-step-msg">${s.message}</span>` : ''}
+      `;
+      stepListEl.appendChild(li);
+    });
+  }
+
   function handlePipelineDone() {
     if (completed) return;
     completed = true;
     if (pollInterval) clearInterval(pollInterval);
-    closeWs?.();
     setProgress(100, 'Complete!');
+    console.log('[Generating] Pipeline done for session:', sessionId);
     setTimeout(() => onComplete(sessionId), 400);
   }
 
-  function handleError(msg: string) {
-    if (pollInterval) clearInterval(pollInterval);
-    closeWs?.();
-    if (errorEl) { errorEl.style.display = 'block'; errorEl.textContent = `Error: ${msg}`; }
-  }
+  function handleError(msgs: string[]) {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+    const msg = msgs.length > 0 ? msgs.join('; ') : 'Unknown pipeline error';
+    console.error('[Generating] Pipeline error:', msg);
+    if (progressLabel) progressLabel.textContent = 'Generation failed';
 
-  function onProgressEvent(event: any) {
-    if (event.step && event.step !== 'pipeline') {
-      const label = STEP_LABELS[event.step] ?? event.step;
-      if (event.status === 'started') {
-        setProgress(stepsCompleted * STEP_PCT, label);
-      } else if (event.status === 'done') {
-        stepsCompleted = Math.min(stepsCompleted + 1, STEP_ORDER.length);
-        setProgress(stepsCompleted * STEP_PCT, label);
+    if (!errorEl) return;
+    errorEl.style.display = 'block';
+    errorEl.innerHTML = '';
+
+    const msgP = document.createElement('p');
+    msgP.style.cssText = 'margin:0 0 0.75rem;';
+    msgP.textContent = `Error: ${msg}`;
+    errorEl.appendChild(msgP);
+
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'btn-primary';
+    retryBtn.textContent = 'Retry Failed Scenes';
+    retryBtn.style.cssText = 'margin-top:0.5rem;';
+    retryBtn.addEventListener('click', async () => {
+      retryBtn.disabled = true;
+      retryBtn.textContent = 'Retrying…';
+      errorEl.style.display = 'none';
+      completed = false;
+      try {
+        setProgress(2, 'Retrying failed scenes…');
+        await retryFailedScenes(sessionId);
+        startPolling();
+      } catch (err: any) {
+        handleError([err?.message ?? String(err)]);
       }
-    }
-    if (event.step === 'pipeline' && event.status === 'done') {
-      handlePipelineDone();
-    }
-    if (event.type === 'error' || event.status === 'error') {
-      handleError(event.message ?? event.error ?? 'Pipeline error');
-    }
+    });
+    errorEl.appendChild(retryBtn);
   }
-
-  // Start pipeline then open WS
-  (async () => {
-    try {
-      setProgress(0, 'Initializing...');
-      await startGeneration(sessionId);
-
-      // Try WS first
-      let wsConnected = false;
-      closeWs = openProgressSocket(
-        sessionId,
-        (e) => { wsConnected = true; onProgressEvent(e); },
-        () => {
-          // WS closed — if not done, fall back to polling
-          if (!completed) startPolling();
-        }
-      );
-
-      // Give WS 3s to connect before starting backup poll
-      setTimeout(() => {
-        if (!wsConnected && !completed) startPolling();
-      }, 3000);
-    } catch (err: any) {
-      handleError(err?.message ?? String(err));
-    }
-  })();
 
   function startPolling() {
     if (pollInterval) return;
+    console.log('[Generating] Starting status poll for session:', sessionId);
     pollInterval = setInterval(async () => {
       try {
         const status = await getStatus(sessionId);
-        // Update progress from steps array
-        if (Array.isArray(status.steps)) {
-          stepsCompleted = status.steps.filter((s: any) => s.status === 'done').length;
-          const current = status.steps.find((s: any) => s.status === 'running');
-          const label = current ? (STEP_LABELS[current.name] ?? current.name) : `${stepsCompleted}/${STEP_ORDER.length} steps done`;
-          setProgress(stepsCompleted * STEP_PCT, label);
+        console.log('[Generating] Status:', status.status, 'steps:', status.steps?.length);
+
+        if (Array.isArray(status.steps) && status.steps.length > 0) {
+          renderSteps(status.steps);
+          const doneCount = status.steps.filter(s => s.status === 'done').length;
+          const total = status.steps.length;
+          const running = status.steps.find(s => s.status === 'running');
+          const pct = total > 0 ? (doneCount / total) * 100 : 0;
+          const label = running
+            ? stepLabel(running.step)
+            : `${doneCount}/${total} steps complete`;
+          setProgress(pct, label);
         }
-        if (status.status === 'done' || status.final_video_path) {
+
+        if (status.status === 'done') {
           clearInterval(pollInterval!);
+          pollInterval = null;
           handlePipelineDone();
         } else if (status.status === 'error') {
           clearInterval(pollInterval!);
-          handleError((status.errors ?? []).join(', ') || 'Unknown error');
+          pollInterval = null;
+          handleError(status.errors ?? []);
         }
-      } catch {}
-    }, 3000);
+      } catch (err: any) {
+        console.warn('[Generating] Poll error (will retry):', err?.message ?? err);
+      }
+    }, 10000);
   }
+
+  // Kick off: call generate (unless pipeline already running) then start polling
+  (async () => {
+    try {
+      if (skipGenerate) {
+        console.log('[Generating] Pipeline already running for session:', sessionId);
+        setProgress(2, 'Pipeline started...');
+      } else {
+        setProgress(0, 'Initializing...');
+        console.log('[Generating] Calling startGeneration for session:', sessionId);
+        await startGeneration(sessionId);
+        console.log('[Generating] Generation enqueued');
+        setProgress(2, 'Pipeline started...');
+      }
+      startPolling();
+    } catch (err: any) {
+      handleError([err?.message ?? String(err)]);
+    }
+  })();
 
   attachMotion(screen);
   return screen;
 }
 
 // ============================================================
-// SCREEN 4 — Story Ready
+// SCREEN 4 — Story Ready (Video Page)
 // ============================================================
 
 export function createStoryScreen(
   sessionId: string,
-  fromMockStore: boolean,
   onBack: () => void,
-  onEdit?: (sessionId: string) => void
+  onEdit: (sessionId: string) => void
 ): HTMLElement {
   const screen = document.createElement('div');
   screen.id = 'screen-story';
   screen.className = 'screen';
 
   screen.innerHTML = `
-    <!-- Video Page specific background -->
     <div class="video-page-bg" style="background-image: url(/assets/background.jpeg);"></div>
     <div class="video-page-overlay"></div>
 
@@ -221,12 +279,10 @@ export function createStoryScreen(
         ></video>
       </div>
       <div class="video-details-section">
-        <div class="badge-ready">Masterpiece</div>
+        <div class="badge-ready" id="version-badge">Masterpiece</div>
         <h1 class="video-title" id="story-title">Loading...</h1>
         <p class="video-desc" id="story-desc"></p>
-        <div class="video-actions" id="video-actions">
-           <!-- Edit button injected here if user-generated -->
-        </div>
+        <div class="video-actions" id="video-actions"></div>
       </div>
     </div>
   `;
@@ -235,36 +291,87 @@ export function createStoryScreen(
   const descEl = screen.querySelector<HTMLElement>('#story-desc');
   const videoEl = screen.querySelector<HTMLVideoElement>('#story-video');
   const actionsEl = screen.querySelector<HTMLElement>('#video-actions');
-  
-  if (fromMockStore) {
-    const story = getStoryById(sessionId);
-    if (story) {
-      if (titleEl) titleEl.textContent = story.title;
-      if (descEl) descEl.textContent = story.desc;
-      if (videoEl) videoEl.src = story.videoUrl;
-      
-      if (story.isUserGenerated && actionsEl && onEdit) {
-        const editBtn = document.createElement('button');
-        editBtn.className = 'btn-primary';
-        editBtn.innerHTML = '✏️ Edit Story';
-        editBtn.onclick = () => onEdit(sessionId);
-        actionsEl.appendChild(editBtn);
-      }
-    }
-  } else {
-    // Legacy fallback
-    (async () => {
+  const versionBadge = screen.querySelector<HTMLElement>('#version-badge');
+
+  if (actionsEl) {
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn-primary';
+    editBtn.textContent = 'Edit Video';
+    editBtn.id = 'edit-video-btn';
+    editBtn.addEventListener('click', () => {
+      console.log('[StoryScreen] Edit Video clicked for session:', sessionId);
+      onEdit(sessionId);
+    });
+    actionsEl.appendChild(editBtn);
+
+    const recompileBtn = document.createElement('button');
+    recompileBtn.className = 'btn-outline';
+    recompileBtn.textContent = 'Recompile';
+    recompileBtn.id = 'recompile-btn';
+    recompileBtn.addEventListener('click', async () => {
+      console.log('[StoryScreen] Recompile clicked for session:', sessionId);
+      recompileBtn.disabled = true;
+      recompileBtn.textContent = 'Recompiling...';
       try {
-        const state = await getState(sessionId);
-        const breakdown = state?.breakdown ?? {};
-        if (titleEl) titleEl.textContent = breakdown.title ?? 'Your Story';
-        if (descEl) descEl.textContent = breakdown.premise ?? '';
-        if (videoEl) videoEl.src = videoUrl(sessionId);
-      } catch (e) {
-        console.error(e);
+        await recompileVideo(sessionId);
+        const poll = setInterval(async () => {
+          try {
+            const st = await getStatus(sessionId);
+            if (st.status === 'done') {
+              clearInterval(poll);
+              const vd = await getVideo(sessionId);
+              if (videoEl) {
+                videoEl.src = vd.video_url;
+                videoEl.load();
+              }
+              if (versionBadge) versionBadge.textContent = `Version ${vd.version}`;
+              recompileBtn.disabled = false;
+              recompileBtn.textContent = 'Recompile';
+            } else if (st.status === 'error') {
+              clearInterval(poll);
+              recompileBtn.disabled = false;
+              recompileBtn.textContent = 'Recompile';
+            }
+          } catch { /* keep polling */ }
+        }, 3000);
+      } catch (err: any) {
+        console.error('[StoryScreen] Recompile failed:', err);
+        recompileBtn.disabled = false;
+        recompileBtn.textContent = 'Recompile';
       }
-    })();
+    });
+    actionsEl.appendChild(recompileBtn);
   }
+
+  // Fetch video and story details from backend
+  (async () => {
+    try {
+      console.log('[StoryScreen] Fetching video for session:', sessionId);
+      const [videoData, stateData] = await Promise.all([
+        getVideo(sessionId),
+        getState(sessionId).catch(() => null),
+      ]);
+
+      if (videoEl) {
+        videoEl.src = videoData.video_url;
+        console.log('[StoryScreen] Video URL set:', videoData.video_url, 'version:', videoData.version);
+      }
+      if (versionBadge) {
+        versionBadge.textContent = `Version ${videoData.version}`;
+      }
+
+      if (stateData?.breakdown) {
+        if (titleEl) titleEl.textContent = stateData.breakdown.title ?? 'Your Story';
+        if (descEl) descEl.textContent = stateData.breakdown.premise ?? '';
+      } else {
+        if (titleEl) titleEl.textContent = 'Your Story';
+      }
+    } catch (err: any) {
+      console.error('[StoryScreen] Failed to load video/state:', err);
+      if (titleEl) titleEl.textContent = 'Your Story';
+      if (descEl) descEl.textContent = 'Could not load story details.';
+    }
+  })();
 
   screen.querySelector<HTMLButtonElement>('#back-btn')?.addEventListener('click', onBack);
 
