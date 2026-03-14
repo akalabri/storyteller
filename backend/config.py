@@ -178,19 +178,19 @@ if _legacy_dev_skip and not DEV_MODE:
 # ---------------------------------------------------------------------------
 # Retry settings
 # ---------------------------------------------------------------------------
-RATE_LIMIT_DELAYS: list[int] = [15, 30, 60, 120]     # seconds on 429
+RATE_LIMIT_DELAYS: list[int] = [30, 60, 120, 180]     # seconds on 429
 VEO_INTERNAL_ERROR_RETRIES: int = 3
 VEO_INTERNAL_ERROR_DELAYS: list[int] = [30, 60, 120]
 
 # Scene image generation retries
 # Rate-limit back-off delays (seconds) — applied on HTTP 429 responses.
-IMAGE_RATE_LIMIT_DELAYS: list[int] = [15, 30, 60, 120]
+IMAGE_RATE_LIMIT_DELAYS: list[int] = [30, 60, 120, 180, 300]
 # Transient-error back-off delays (seconds) — applied on 5xx / network errors.
 IMAGE_TRANSIENT_DELAYS: list[int] = [5, 15, 30]
 
 # Scene video generation retries (Veo + FAL)
 # Rate-limit back-off delays (seconds) — applied on HTTP 429 responses.
-VIDEO_RATE_LIMIT_DELAYS: list[int] = [15, 30, 60, 120]
+VIDEO_RATE_LIMIT_DELAYS: list[int] = [30, 60, 120, 180]
 # Transient-error back-off delays (seconds) — applied on 5xx / network / timeout errors.
 VIDEO_TRANSIENT_DELAYS: list[int] = [10, 30, 60]
 

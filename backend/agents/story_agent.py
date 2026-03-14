@@ -42,7 +42,7 @@ SCENE RULES — follow every rule for every scene:
 • ONE narrative beat per scene — a single moment, action, or turn of events. Do not cram \
   multiple plot points into one scene.
 • Use simple language for the story.
-• Length: 40-60 words per scene only. Never exceed 60 words. Be punchy and precise.
+• Length: 60-80 words per scene only. Never exceed 80 words. Be punchy and precise.
 • Write genuine narrative prose (the story itself, not a summary or description of it).
 • Use vivid, concrete sensory details — what characters see, hear, smell, feel.
 • End each scene on a small hook or tension that pulls the reader into the next.
