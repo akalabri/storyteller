@@ -116,11 +116,66 @@ For each sub-scene produce two prompts:
    - END the prompt with the style tag defined in Step 0 — verbatim, every time.
    Pull specific imagery, actions, and sensory details directly from the story prose for that scene.
 
-2. video_prompt — Describe only what moves or changes to animate the still into a short clip.
+2. video_prompt — Describe the starting frame briefly (who is where, the setting, the mood) 
+   and then describe what moves or changes to animate it into a short clip.
    Cover: gentle camera movement (slow push in, subtle drift), character micro-actions 
    (ear twitch, a slow exhale, a tentative step), and environmental motion 
    (snowflakes drifting, embers floating up, firelight flickering, a scarf shifting in a breeze).
-   Do NOT re-describe the static scene. Characters must never speak or mouth words — no talking, no lip movement, no dialogue gestures. Keep motion gentle and wonder-filled.
+   The video model has no memory of the image_prompt, so give it enough scene context to 
+   understand what it is animating — but keep the static description concise (1-2 sentences) 
+   and spend most of the prompt on the motion.
+   Characters must never speak or mouth words — no talking, no lip movement, no dialogue gestures. Keep motion gentle and wonder-filled.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEQUENTIAL CONTINUITY — every frame must follow logically from the last
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The sub-scenes will be rendered into images and videos that play back-to-back as a 
+continuous sequence. A viewer will watch sub-scene 1 → sub-scene 2 → sub-scene 3 → 
+scene 2 sub-scene 1 → … in strict order. Therefore:
+
+SPATIAL POSITIONS MUST FLOW LOGICALLY:
+- If a character is facing another character, or standing in front of / behind / beside 
+  them, that spatial relationship must carry forward or change only when the narration 
+  justifies it. A bear standing in front of a child in sub-scene 2 cannot suddenly appear 
+  behind the child in sub-scene 3 unless the story explicitly describes the bear moving.
+- Before writing each sub-scene's prompts, mentally replay the sequence so far: where is 
+  each character standing? Which direction are they facing? What are they holding? Continue 
+  from that exact state — do not reset positions arbitrarily.
+- When a character moves between sub-scenes, describe the resulting new position explicitly 
+  (e.g. "the bear has now circled behind the boy and stands at his back").
+
+ACTIONS MUST PROGRESS, NOT REPEAT OR CONTRADICT:
+- If sub-scene 1 shows a character reaching for a door, sub-scene 2 should show them 
+  opening or entering — not reaching again, and not already inside with no transition.
+- If a character picks up an object, they must still be holding it in subsequent sub-scenes 
+  until the story says they put it down.
+- Emotional arcs must progress too: a character who is frightened in sub-scene 1 and brave 
+  by sub-scene 3 should show a gradual shift, not a sudden jump.
+
+ENVIRONMENT MUST REMAIN ANCHORED:
+- The same background elements (trees, buildings, furniture, sky) must stay in consistent 
+  relative positions across consecutive sub-scenes within a scene. If the camera angle 
+  changes, describe the new perspective explicitly so the spatial layout still makes sense.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SELF-CONTAINED PROMPTS — each prompt must stand completely on its own
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Each image_prompt and video_prompt will be sent INDEPENDENTLY to a generative model that 
+has NO memory of any other prompt. It cannot see the previous or next sub-scene. Therefore:
+
+- NEVER assume context carries over. Every image_prompt must contain ALL the information 
+  needed to render that exact moment: the full setting description, the characters present 
+  and what they are doing, their spatial arrangement, the lighting, the mood, the weather, 
+  and the style tag.
+- Do NOT use shorthand like "same forest as before", "the bear again", or "continuing from 
+  the previous scene". Instead, re-state the environment ("a dense snow-covered pine forest 
+  with a narrow dirt path, pale morning light filtering through the canopy") and re-state 
+  character actions and positions from scratch every time.
+- If two consecutive sub-scenes share the same setting, both prompts must independently 
+  describe that setting in full. Redundancy across prompts is correct and required.
+- The video_prompt must also be self-sufficient: it should specify what is already visible 
+  in the frame (briefly) before describing what moves, so the video model understands the 
+  starting state of the animation.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PROP & LOCATION CONSISTENCY
