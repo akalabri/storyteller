@@ -18,7 +18,7 @@ interface EditRefs {
 }
 
 let refs: EditRefs;
-let onApplyCb: ((sessionId: string) => void) | null = null;
+let onApplyCb: ((editPromise: Promise<string>) => void) | null = null;
 let editSocket: ConvSocket | null = null;
 let currentSessionId = '';
 
@@ -69,23 +69,15 @@ export async function startEditConversation() {
         console.log(`[EditConversation] Transcript [${speaker}]: ${text}`);
         addMessage(text, speaker);
       },
-      async () => {
-        // session_end received — submit edit from transcript then navigate
-        console.log('[EditConversation] session_end received, calling editFromTranscript');
+      () => {
+        console.log('[EditConversation] session_end received, navigating immediately');
         setOrbState('processing');
-        refs.statusLabel.textContent = 'Submitting edit...';
         refs.finishBtn.disabled = true;
-        try {
-          const editResult = await editFromTranscript(currentSessionId);
-          const newSessionId = editResult.session_id;
-          console.log('[EditConversation] editFromTranscript submitted, clone session:', newSessionId);
-          onApplyCb?.(newSessionId);
-        } catch (err: any) {
-          console.error('[EditConversation] editFromTranscript failed:', err);
-          addMessage(`Error submitting edit: ${err?.message ?? err}`, 'ai');
-          refs.statusLabel.textContent = 'Edit submission failed';
-          refs.finishBtn.disabled = false;
-        }
+        const editPromise = editFromTranscript(currentSessionId).then(r => {
+          console.log('[EditConversation] editFromTranscript resolved, clone session:', r.session_id);
+          return r.session_id;
+        });
+        onApplyCb?.(editPromise);
       },
       (msg) => {
         console.error('[EditConversation] Error:', msg);
@@ -140,7 +132,7 @@ export function resetEditConversation() {
 
 export function createEditScreen(
   sessionId: string,
-  onApply: (sessionId: string) => void
+  onApply: (editPromise: Promise<string>) => void
 ): HTMLElement {
   currentSessionId = sessionId;
   onApplyCb = onApply;

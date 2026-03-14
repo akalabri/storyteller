@@ -15,42 +15,72 @@ import {
 } from '../utils/api.js';
 
 // ============================================================
-// Step display helpers
+// Phase-based progress display
 // ============================================================
 
-const STEP_LABELS: Record<string, string> = {
-  story_breakdown: 'Analyzing your story',
-  visual_plan: 'Planning visual scenes',
-  compile: 'Compiling final video',
+interface Phase {
+  id: string;
+  label: string;
+  icon: string;
+  status: 'pending' | 'running' | 'done' | 'failed';
+}
+
+const PHASE_ICONS = {
+  writing: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>`,
+  designing: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><path d="M17.5 10.5 21 3"/><path d="M3 21l5.5-5.5"/><path d="M12.5 11.5 6 18"/><circle cx="7.5" cy="16.5" r="2.5"/><path d="M3 3l3.5 7"/></svg>`,
+  animating: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/><line x1="17" y1="17" x2="22" y2="17"/></svg>`,
+  finishing: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
 };
 
-function stepLabel(step: string): string {
-  if (STEP_LABELS[step]) return STEP_LABELS[step];
-  if (step.startsWith('narration:')) return `Narration (scene ${step.split(':')[1]})`;
-  if (step.startsWith('character:')) return `Character: ${step.split(':')[1]}`;
-  if (step.startsWith('scene_image:')) return `Scene image: ${step.split(':').slice(1).join(':')}`;
-  if (step.startsWith('scene_video:')) return `Scene video: ${step.split(':').slice(1).join(':')}`;
-  return step;
+const PHASE_CHECK = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+
+function classifyStep(step: string): string {
+  if (step === 'story_breakdown') return 'writing';
+  if (step === 'visual_plan' || step.startsWith('character:')) return 'designing';
+  if (step === 'compile') return 'finishing';
+  return 'animating';
 }
 
-function stepIcon(status: StepStatus['status']): string {
-  switch (status) {
-    case 'done':    return '✓';
-    case 'running': return '⟳';
-    case 'failed':  return '✗';
-    case 'skipped': return '–';
-    default:        return '○';
+function mapStepsToPhases(steps: StepStatus[]): Phase[] {
+  const groups: Record<string, StepStatus[]> = {
+    writing: [],
+    designing: [],
+    animating: [],
+    finishing: [],
+  };
+
+  for (const s of steps) {
+    const phase = classifyStep(s.step);
+    groups[phase].push(s);
   }
+
+  function phaseStatus(stepsInGroup: StepStatus[]): Phase['status'] {
+    if (stepsInGroup.length === 0) return 'pending';
+    const hasRunning = stepsInGroup.some(s => s.status === 'running');
+    const hasPending = stepsInGroup.some(s => s.status === 'pending');
+    const hasFailed = stepsInGroup.some(s => s.status === 'failed');
+    if (hasRunning || (hasPending && hasFailed)) return 'running';
+    if (stepsInGroup.every(s => s.status === 'done' || s.status === 'skipped')) return 'done';
+    if (hasFailed) return 'failed';
+    return 'pending';
+  }
+
+  return [
+    { id: 'writing', label: 'Writing your story', icon: PHASE_ICONS.writing, status: phaseStatus(groups.writing) },
+    { id: 'designing', label: 'Designing your world', icon: PHASE_ICONS.designing, status: phaseStatus(groups.designing) },
+    { id: 'animating', label: 'Bringing scenes to life', icon: PHASE_ICONS.animating, status: phaseStatus(groups.animating) },
+    { id: 'finishing', label: 'Final touches', icon: PHASE_ICONS.finishing, status: phaseStatus(groups.finishing) },
+  ];
 }
 
-function stepClass(status: StepStatus['status']): string {
-  switch (status) {
-    case 'done':    return 'step-done';
-    case 'running': return 'step-running';
-    case 'failed':  return 'step-failed';
-    case 'skipped': return 'step-skipped';
-    default:        return 'step-pending';
+function phaseProgress(phases: Phase[]): number {
+  const weights = [10, 25, 55, 10];
+  let pct = 0;
+  for (let i = 0; i < phases.length; i++) {
+    if (phases[i].status === 'done') pct += weights[i];
+    else if (phases[i].status === 'running') pct += weights[i] * 0.4;
   }
+  return Math.min(pct, 99);
 }
 
 // ============================================================
@@ -58,13 +88,18 @@ function stepClass(status: StepStatus['status']): string {
 // ============================================================
 
 export function createGeneratingScreen(
-  sessionId: string,
+  sessionIdOrPromise: string | Promise<string>,
   onComplete: (sessionId: string) => void,
   skipGenerate = false,
+  onHome?: () => void,
 ): HTMLElement {
   const screen = document.createElement('div');
   screen.id = 'screen-generating';
   screen.className = 'screen';
+
+  const isPending = typeof sessionIdOrPromise !== 'string';
+
+  const HOME_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`;
 
   screen.innerHTML = `
     <!-- PINK TOP SECTION -->
@@ -103,22 +138,33 @@ export function createGeneratingScreen(
         <div class="gen-progress-track">
           <div class="gen-progress-fill" id="gen-progress"></div>
         </div>
-        <p class="gen-progress-label" id="gen-progress-label">Starting...</p>
+        <p class="gen-progress-label" id="gen-progress-label">${isPending ? 'Preparing your edit…' : 'Starting...'}</p>
       </div>
 
-      <!-- Step list -->
-      <ul class="gen-step-list" id="gen-step-list" aria-live="polite"></ul>
+      <!-- Phase cards -->
+      <div class="gen-phases" id="gen-phases" aria-live="polite"></div>
+
+      <!-- Browse hint + home button -->
+      <div class="gen-browse-hint">
+        <p class="gen-browse-text">Feel free to explore your other stories — we'll let you know when this one's ready.</p>
+        <button class="gen-browse-btn" id="gen-home-btn">${HOME_ICON}<span>Browse Stories</span></button>
+      </div>
 
       <!-- Error message -->
       <p class="gen-error-msg" id="gen-error" style="display:none;color:#ff6b6b;text-align:center;margin-top:1rem;"></p>
     </section>
   `;
 
+  if (onHome) {
+    screen.querySelector<HTMLButtonElement>('#gen-home-btn')?.addEventListener('click', onHome);
+  }
+
   const progressFill = screen.querySelector<HTMLElement>('#gen-progress');
   const progressLabel = screen.querySelector<HTMLElement>('#gen-progress-label');
-  const stepListEl = screen.querySelector<HTMLElement>('#gen-step-list');
+  const phasesEl = screen.querySelector<HTMLElement>('#gen-phases');
   const errorEl = screen.querySelector<HTMLElement>('#gen-error');
 
+  let resolvedSessionId = isPending ? '' : sessionIdOrPromise as string;
   let completed = false;
   let pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -127,19 +173,26 @@ export function createGeneratingScreen(
     if (progressLabel) progressLabel.textContent = label;
   }
 
-  function renderSteps(steps: StepStatus[]) {
-    if (!stepListEl) return;
-    stepListEl.innerHTML = '';
-    steps.forEach(s => {
-      const li = document.createElement('li');
-      li.className = `gen-step-item ${stepClass(s.status)}`;
-      li.innerHTML = `
-        <span class="gen-step-icon">${stepIcon(s.status)}</span>
-        <span class="gen-step-name">${stepLabel(s.step)}</span>
-        ${s.message ? `<span class="gen-step-msg">${s.message}</span>` : ''}
+  function renderPhases(phases: Phase[]) {
+    if (!phasesEl) return;
+    phasesEl.innerHTML = '';
+    for (const p of phases) {
+      const item = document.createElement('div');
+      item.className = `gen-phase-item phase-${p.status}`;
+      const statusHTML = p.status === 'done'
+        ? `<span class="gen-phase-status">${PHASE_CHECK}</span>`
+        : p.status === 'running'
+          ? `<span class="gen-phase-status gen-phase-running-dot"></span>`
+          : p.status === 'failed'
+            ? `<span class="gen-phase-status gen-phase-failed-x">!</span>`
+            : `<span class="gen-phase-status"></span>`;
+      item.innerHTML = `
+        <span class="gen-phase-icon">${p.icon}</span>
+        <span class="gen-phase-label">${p.label}</span>
+        ${statusHTML}
       `;
-      stepListEl.appendChild(li);
-    });
+      phasesEl.appendChild(item);
+    }
   }
 
   function handlePipelineDone() {
@@ -147,8 +200,8 @@ export function createGeneratingScreen(
     completed = true;
     if (pollInterval) clearInterval(pollInterval);
     setProgress(100, 'Complete!');
-    console.log('[Generating] Pipeline done for session:', sessionId);
-    setTimeout(() => onComplete(sessionId), 400);
+    console.log('[Generating] Pipeline done for session:', resolvedSessionId);
+    setTimeout(() => onComplete(resolvedSessionId), 400);
   }
 
   function handleError(msgs: string[]) {
@@ -180,7 +233,7 @@ export function createGeneratingScreen(
       completed = false;
       try {
         setProgress(2, 'Retrying failed scenes…');
-        await retryFailedScenes(sessionId);
+        await retryFailedScenes(resolvedSessionId);
         startPolling();
       } catch (err: any) {
         handleError([err?.message ?? String(err)]);
@@ -190,22 +243,19 @@ export function createGeneratingScreen(
   }
 
   function startPolling() {
-    if (pollInterval) return;
-    console.log('[Generating] Starting status poll for session:', sessionId);
+    if (pollInterval || !resolvedSessionId) return;
+    console.log('[Generating] Starting status poll for session:', resolvedSessionId);
     pollInterval = setInterval(async () => {
       try {
-        const status = await getStatus(sessionId);
+        const status = await getStatus(resolvedSessionId);
         console.log('[Generating] Status:', status.status, 'steps:', status.steps?.length);
 
         if (Array.isArray(status.steps) && status.steps.length > 0) {
-          renderSteps(status.steps);
-          const doneCount = status.steps.filter(s => s.status === 'done').length;
-          const total = status.steps.length;
-          const running = status.steps.find(s => s.status === 'running');
-          const pct = total > 0 ? (doneCount / total) * 100 : 0;
-          const label = running
-            ? stepLabel(running.step)
-            : `${doneCount}/${total} steps complete`;
+          const phases = mapStepsToPhases(status.steps);
+          renderPhases(phases);
+          const pct = phaseProgress(phases);
+          const activePhase = phases.find(p => p.status === 'running');
+          const label = activePhase ? activePhase.label : `${phases.filter(p => p.status === 'done').length}/${phases.length} phases complete`;
           setProgress(pct, label);
         }
 
@@ -224,24 +274,35 @@ export function createGeneratingScreen(
     }, 10000);
   }
 
-  // Kick off: call generate (unless pipeline already running) then start polling
-  (async () => {
-    try {
-      if (skipGenerate) {
-        console.log('[Generating] Pipeline already running for session:', sessionId);
-        setProgress(2, 'Pipeline started...');
-      } else {
-        setProgress(0, 'Initializing...');
-        console.log('[Generating] Calling startGeneration for session:', sessionId);
-        await startGeneration(sessionId);
-        console.log('[Generating] Generation enqueued');
-        setProgress(2, 'Pipeline started...');
-      }
+  if (isPending) {
+    setProgress(1, 'Preparing your edit…');
+    (sessionIdOrPromise as Promise<string>).then((sid) => {
+      resolvedSessionId = sid;
+      console.log('[Generating] Edit promise resolved, session:', sid);
+      setProgress(2, 'Pipeline started...');
       startPolling();
-    } catch (err: any) {
+    }).catch((err: any) => {
       handleError([err?.message ?? String(err)]);
-    }
-  })();
+    });
+  } else {
+    (async () => {
+      try {
+        if (skipGenerate) {
+          console.log('[Generating] Pipeline already running for session:', resolvedSessionId);
+          setProgress(2, 'Pipeline started...');
+        } else {
+          setProgress(0, 'Initializing...');
+          console.log('[Generating] Calling startGeneration for session:', resolvedSessionId);
+          await startGeneration(resolvedSessionId);
+          console.log('[Generating] Generation enqueued');
+          setProgress(2, 'Pipeline started...');
+        }
+        startPolling();
+      } catch (err: any) {
+        handleError([err?.message ?? String(err)]);
+      }
+    })();
+  }
 
   attachMotion(screen);
   return screen;

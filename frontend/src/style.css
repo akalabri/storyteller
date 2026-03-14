@@ -1082,7 +1082,7 @@ body {
 
 .gen-spinner-circle {
   fill: none;
-  stroke: #FFFFFF;
+  stroke: #a68a64;
   stroke-width: 5;
   stroke-linecap: round;
   stroke-dasharray: 330;
@@ -1091,7 +1091,7 @@ body {
 
 .gen-spinner-track {
   fill: none;
-  stroke: rgba(255,255,255,0.06);
+  stroke: rgba(166,138,100,0.15);
   stroke-width: 5;
 }
 
@@ -1138,58 +1138,165 @@ body {
   color: rgb(0 0 0);
 }
 
-/* ---- Step list (generating screen) ---- */
-.gen-step-list {
-  list-style: none;
+/* ---- Phase cards (generating screen) ---- */
+.gen-phases {
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
   margin-top: 20px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 
-.gen-step-item {
+.gen-phase-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  background: rgba(0,0,0,0.08);
-  transition: background 0.2s;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgba(0,0,0,0.06);
+  border: 1.5px solid transparent;
+  transition: background 0.3s, border-color 0.3s, opacity 0.3s;
 }
 
-.gen-step-icon {
+.gen-phase-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.06);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: rgba(0,0,0,0.4);
+  transition: background 0.3s, color 0.3s;
+}
+
+.gen-phase-label {
+  flex: 1;
   font-size: 14px;
-  width: 18px;
-  text-align: center;
+  font-weight: 600;
+  color: rgba(0,0,0,0.55);
+  transition: color 0.3s;
+}
+
+.gen-phase-status {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
-.gen-step-name {
-  flex: 1;
-  font-weight: 500;
-  color: rgba(0,0,0,0.75);
+/* Pending */
+.gen-phase-item.phase-pending {
+  opacity: 0.5;
 }
 
-.gen-step-msg {
-  font-size: 11px;
-  color: rgba(0,0,0,0.45);
+/* Running */
+.gen-phase-item.phase-running {
+  background: rgba(166,138,100,0.1);
+  border-color: rgba(166,138,100,0.35);
+  opacity: 1;
+}
+.gen-phase-item.phase-running .gen-phase-icon {
+  background: rgba(166,138,100,0.15);
+  color: #a68a64;
+}
+.gen-phase-item.phase-running .gen-phase-label {
+  color: rgba(0,0,0,0.85);
+}
+.gen-phase-running-dot {
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 50%;
+  background: #a68a64;
+  animation: gen-phase-pulse 1.2s ease-in-out infinite;
+}
+@keyframes gen-phase-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.35; transform: scale(0.6); }
 }
 
-.gen-step-item.step-done .gen-step-icon { color: #34c759; }
-.gen-step-item.step-done { background: rgba(52,199,89,0.08); }
-.gen-step-item.step-running .gen-step-icon { color: #007aff; animation: spin 1s linear infinite; }
-.gen-step-item.step-running { background: rgba(0,122,255,0.08); }
-.gen-step-item.step-failed .gen-step-icon { color: #ff3b30; }
-.gen-step-item.step-failed { background: rgba(255,59,48,0.08); }
-.gen-step-item.step-skipped { opacity: 0.45; }
-.gen-step-item.step-pending { opacity: 0.5; }
+/* Done */
+.gen-phase-item.phase-done {
+  background: rgba(52,199,89,0.06);
+  opacity: 1;
+}
+.gen-phase-item.phase-done .gen-phase-icon {
+  background: rgba(52,199,89,0.12);
+  color: #34c759;
+}
+.gen-phase-item.phase-done .gen-phase-label {
+  color: rgba(0,0,0,0.7);
+}
+
+/* Failed */
+.gen-phase-item.phase-failed {
+  background: rgba(255,59,48,0.06);
+  border-color: rgba(255,59,48,0.25);
+  opacity: 1;
+}
+.gen-phase-item.phase-failed .gen-phase-icon {
+  background: rgba(255,59,48,0.12);
+  color: #ff3b30;
+}
+.gen-phase-item.phase-failed .gen-phase-label {
+  color: rgba(0,0,0,0.7);
+}
+.gen-phase-failed-x {
+  font-weight: 700;
+  font-size: 14px;
+  color: #ff3b30;
+}
 
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* ---- Browse hint (generating screen) ---- */
+.gen-browse-hint {
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 380px;
+  text-align: center;
+}
+
+.gen-browse-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(0,0,0,0.45);
+  margin: 0;
+}
+
+.gen-browse-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 22px;
+  border: 1.5px solid rgba(166,138,100,0.35);
+  border-radius: 10px;
+  background: rgba(166,138,100,0.08);
+  color: #7a6844;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+}
+
+.gen-browse-btn:hover {
+  background: rgba(166,138,100,0.16);
+  border-color: rgba(166,138,100,0.5);
+  transform: translateY(-1px);
+}
+
+.gen-browse-btn:active {
+  transform: translateY(0);
 }
 
 .gen-summary-card {

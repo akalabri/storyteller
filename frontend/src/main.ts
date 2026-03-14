@@ -14,7 +14,7 @@ import {
   startEditConversation,
 } from './screens/edit.js';
 import { addStory } from './utils/store.js';
-import { getVideo, getState, getThumbnailUrl, startEditConversation as apiStartEditConversation } from './utils/api.js';
+import { getVideo, getState, getStatus, getThumbnailUrl, startEditConversation as apiStartEditConversation } from './utils/api.js';
 
 // ============================================================
 // Screen Manager
@@ -75,10 +75,46 @@ let sessionId = '';
 let manager: ScreenManager;
 
 // ============================================================
+// Active generation persistence (localStorage)
+// ============================================================
+
+const ACTIVE_GENS_KEY = 'storyteller-active-gens';
+
+function loadActiveGens(): string[] {
+  try {
+    const raw = localStorage.getItem(ACTIVE_GENS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch { /* ignore */ }
+  return [];
+}
+
+function saveActiveGens(sids: string[]) {
+  try {
+    localStorage.setItem(ACTIVE_GENS_KEY, JSON.stringify(sids));
+  } catch { /* ignore */ }
+}
+
+function addActiveGen(sid: string) {
+  const gens = loadActiveGens();
+  if (!gens.includes(sid)) {
+    gens.push(sid);
+    saveActiveGens(gens);
+  }
+}
+
+function removeActiveGen(sid: string) {
+  const gens = loadActiveGens().filter(s => s !== sid);
+  saveActiveGens(gens);
+}
+
+// ============================================================
 // Queue Management — 9:16 portrait card per generation
 // ============================================================
 
 const genEntries = new Set<string>();
+const genScreens = new Map<string, HTMLElement>();
 let queueContainer: HTMLElement | null = null;
 
 function ensureQueueWrapper(): HTMLElement {
@@ -127,8 +163,26 @@ function addGenCard(sid: string) {
   const wrapper = ensureQueueWrapper();
   const tmp = document.createElement('div');
   tmp.innerHTML = buildCardHTML(sid);
-  wrapper.appendChild(tmp.firstElementChild as HTMLElement);
+  const cardEl = tmp.firstElementChild as HTMLElement;
+  wrapper.appendChild(cardEl);
+
+  cardEl.style.cursor = 'pointer';
+  cardEl.addEventListener('click', () => {
+    if (cardEl.classList.contains('gen-card-done')) return;
+    console.log('[GenCard] Clicked running card — navigating to processing:', sid);
+    showGeneratingScreen(sid);
+  });
+
   console.log('[GenCard] Added card for session:', sid);
+}
+
+function showGeneratingScreen(sid: string) {
+  const genEl = genScreens.get(sid);
+  if (genEl) {
+    manager.replace('generating', genEl);
+    genScreens.delete(sid);
+  }
+  manager.show('generating');
 }
 
 function markGenCardDone(sid: string) {
@@ -137,12 +191,12 @@ function markGenCardDone(sid: string) {
   wrap.classList.add('gen-card-done');
   const labelEl = wrap.querySelector<HTMLElement>('.gen-card-label-text');
   if (labelEl) labelEl.textContent = 'Story ready! Click to view';
+  removeActiveGen(sid);
   console.log('[GenCard] Marked done:', sid);
 
-  // Clicking the done card navigates to the story screen
   wrap.style.cursor = 'pointer';
   wrap.addEventListener('click', () => {
-    console.log('[GenCard] Clicked — navigating to story:', sid);
+    console.log('[GenCard] Clicked done card — navigating to story:', sid);
     sessionId = sid;
     buildStoryScreen(sid);
     manager.show('story');
@@ -157,6 +211,7 @@ function dismissGenCard(sid: string) {
   setTimeout(() => {
     wrap.remove();
     genEntries.delete(sid);
+    genScreens.delete(sid);
     const wrapper = queueContainer?.querySelector('.generation-queue');
     if (wrapper && wrapper.children.length === 0) wrapper.remove();
   }, 450);
@@ -176,14 +231,11 @@ function buildConversationScreen() {
   manager.replace('conversation', conv);
 }
 
-function startBackgroundGeneration(sid: string, skipGenerate = false) {
-  addGenCard(sid);
+function onGenerationComplete(completedSid: string) {
+  console.log('[App] Generation complete for session:', completedSid);
+  markGenCardDone(completedSid);
 
-  const gen = createGeneratingScreen(sid, async (completedSid) => {
-    console.log('[App] Generation complete for session:', completedSid);
-    markGenCardDone(completedSid);
-
-    // Fetch real title, thumbnail and video URL to populate the store
+  (async () => {
     try {
       const [videoData, stateData, thumbnailUrl] = await Promise.all([
         getVideo(completedSid),
@@ -210,15 +262,56 @@ function startBackgroundGeneration(sid: string, skipGenerate = false) {
         videoUrl: '',
       });
     }
+  })();
+}
 
-    // Navigate directly to the story/video page
-    sessionId = completedSid;
-    buildStoryScreen(completedSid);
-    manager.show('story');
-  }, skipGenerate);
+function goHome() {
+  manager.show('landing');
+}
 
+function startBackgroundGeneration(sid: string, skipGenerate = false, navigate = true) {
+  addActiveGen(sid);
+  addGenCard(sid);
+
+  const gen = createGeneratingScreen(sid, onGenerationComplete, skipGenerate, goHome);
+  genScreens.set(sid, gen);
+
+  if (navigate) {
+    manager.replace('generating', gen);
+    genScreens.delete(sid);
+    manager.show('generating');
+  }
+}
+
+function startBackgroundGenerationPending(editPromise: Promise<string>) {
+  const placeholderSid = `pending-${Date.now()}`;
+  addGenCard(placeholderSid);
+
+  const gen = createGeneratingScreen(editPromise, (completedSid) => {
+    removeActiveGen(placeholderSid);
+    genScreens.delete(placeholderSid);
+    onGenerationComplete(completedSid);
+  }, true, goHome);
+
+  genScreens.set(placeholderSid, gen);
   manager.replace('generating', gen);
+  genScreens.delete(placeholderSid);
   manager.show('generating');
+
+  editPromise.then((resolvedSid) => {
+    sessionId = resolvedSid;
+    addActiveGen(resolvedSid);
+
+    const oldWrap = getWrapEl(placeholderSid);
+    if (oldWrap) {
+      oldWrap.setAttribute('data-sid', resolvedSid);
+      genEntries.delete(placeholderSid);
+      genEntries.add(resolvedSid);
+    }
+  }).catch((err) => {
+    console.error('[App] Edit promise rejected:', err);
+    dismissGenCard(placeholderSid);
+  });
 }
 
 function buildStoryScreen(sid: string) {
@@ -235,7 +328,6 @@ async function handleEditStory(sid: string) {
   console.log('[App] Starting edit conversation for session:', sid);
 
   try {
-    // Start the edit conversation session on the backend
     await apiStartEditConversation(sid);
     console.log('[App] Edit conversation session started');
   } catch (err: any) {
@@ -244,14 +336,44 @@ async function handleEditStory(sid: string) {
     return;
   }
 
-  const edit = createEditScreen(sid, (updatedSid) => {
-    sessionId = updatedSid;
-    console.log('[App] Edit conversation done, starting background generation for:', updatedSid);
-    startBackgroundGeneration(updatedSid, true);
+  const edit = createEditScreen(sid, (editPromise: Promise<string>) => {
+    console.log('[App] Edit conversation done, navigating to processing immediately');
+    startBackgroundGenerationPending(editPromise);
   });
   manager.replace('edit', edit);
   manager.show('edit');
   void startEditConversation();
+}
+
+// ============================================================
+// Restore active generations on boot
+// ============================================================
+
+async function restoreActiveGens() {
+  const sids = loadActiveGens();
+  if (sids.length === 0) return;
+  console.log('[App] Restoring active generations:', sids);
+
+  for (const sid of sids) {
+    try {
+      const status = await getStatus(sid);
+      if (status.status === 'running' || status.status === 'editing') {
+        addGenCard(sid);
+        const gen = createGeneratingScreen(sid, onGenerationComplete, true, goHome);
+        genScreens.set(sid, gen);
+        console.log('[App] Restored running generation:', sid);
+      } else if (status.status === 'done') {
+        addGenCard(sid);
+        markGenCardDone(sid);
+        console.log('[App] Restored done generation:', sid);
+      } else {
+        removeActiveGen(sid);
+      }
+    } catch (err) {
+      console.warn('[App] Could not restore generation for', sid, err);
+      removeActiveGen(sid);
+    }
+  }
 }
 
 // ============================================================
@@ -306,6 +428,9 @@ async function buildApp() {
     sessionId = savedSession;
     console.log('[App] Restored session from localStorage:', savedSession);
   }
+
+  // ---- Restore any in-progress generations ----
+  await restoreActiveGens();
 
   // ---- Show initial screen ----
   const previewParam = new URLSearchParams(window.location.search).get('preview');
