@@ -4,14 +4,17 @@ background music into the final story video using ffmpeg (via the src utilities)
 
 Pipeline per scene
 ──────────────────
-  0. pre-pass  — for every scene, check if narration audio exceeds MAX_SCENE_AUDIO_S
-                 (23 s).  If so, speed it up with atempo and record the speed factor.
+  0. pre-pass  — for every scene, measure the total video duration (N sub-videos
+                 × SUB_VIDEO_DURATION_S) and compute a target audio duration of
+                 (video_duration - 1 s).  The narration is then stretched or
+                 compressed with atempo so it lands exactly on that target,
+                 regardless of whether the original audio is shorter or longer.
   1. burn_subtitles_per_scene  — karaoke ASS captions burned into each sub-video,
                                  with word timestamps scaled by the speed factor so
-                                 subtitles stay in sync with the faster audio.
+                                 subtitles stay in sync with the adjusted audio.
   2. merge_videos              — concatenate subtitled sub-videos → merged scene
-  3. (audio already processed) — sped-up (or original) audio from the pre-pass
-  4. merge_audio               — mix narration onto merged scene video
+  3. (audio already processed) — time-adjusted audio from the pre-pass
+  4. merge_audio               — lay narration onto merged scene video
 
 Final steps
 ───────────
@@ -49,49 +52,62 @@ logger = logging.getLogger(__name__)
 # Duration of each sub-video clip (seconds) — matches VEO_DURATION_SECONDS
 SUB_VIDEO_DURATION_S: float = 8.0
 
-# Hard cap for narration audio per scene (seconds).
-# If the narration is longer than this, it is sped up to fit.
-# Set slightly below the theoretical maximum (N × 8 s) so there is a small
-# buffer and the audio never overruns the last frame.
-MAX_SCENE_AUDIO_S: float = 23.0
+# How many seconds before the end of the scene's video the narration should
+# finish.  Narration target = (N × SUB_VIDEO_DURATION_S) - AUDIO_END_BUFFER_S.
+AUDIO_END_BUFFER_S: float = 1.0
 
 
 # ---------------------------------------------------------------------------
 # Audio helpers
 # ---------------------------------------------------------------------------
 
-def _speed_up_audio_if_needed(
+def _adjust_audio_to_target(
     audio_path: str,
-    max_duration: float,
+    target_duration: float,
     output_path: str,
 ) -> tuple[str, float]:
     """
-    If the audio is longer than *max_duration*, speed it up with ffmpeg
-    ``atempo`` so it fits within that limit.
+    Stretch or compress the audio so it is exactly *target_duration* seconds
+    long, using ffmpeg's ``atempo`` filter.
 
-    Returns a ``(path, speed_factor)`` tuple where *path* is the (possibly
-    new) audio file and *speed_factor* is the ratio ``original / target``
-    (1.0 when no speed-up was needed).
+    Returns a ``(path, speed_factor)`` tuple where:
+    - *path* is the adjusted audio file (or the original if already on target).
+    - *speed_factor* is ``original_duration / target_duration``:
+        > 1.0  → audio was sped up (compressed)
+        < 1.0  → audio was slowed down (stretched)
+        = 1.0  → no change needed
 
-    ``atempo`` only accepts values in [0.5, 2.0], so for speed factors above
-    2× the filter is chained (e.g. 3× → atempo=2.0,atempo=1.5).
+    ``atempo`` only accepts values in [0.5, 2.0], so extreme ratios are
+    handled by chaining filters (e.g. 3× → ``atempo=2.0,atempo=1.5``,
+    0.25× → ``atempo=0.5,atempo=0.5``).
     """
     audio_duration = get_media_duration(audio_path)
-    if audio_duration <= max_duration:
+
+    # Allow a tiny tolerance (10 ms) to avoid unnecessary re-encoding
+    if abs(audio_duration - target_duration) < 0.01:
         return audio_path, 1.0
 
-    speed_factor = audio_duration / max_duration
+    speed_factor = audio_duration / target_duration
+    direction = "up" if speed_factor > 1.0 else "down"
     logger.info(
-        "Audio (%.2fs) exceeds cap (%.2fs); speeding up ×%.4f → %s",
-        audio_duration, max_duration, speed_factor, output_path,
+        "Audio (%.2fs) → target (%.2fs); speeding %s ×%.4f → %s",
+        audio_duration, target_duration, direction, speed_factor, output_path,
     )
 
     filters: list[str] = []
     remaining = speed_factor
-    while remaining > 2.0:
-        filters.append("atempo=2.0")
-        remaining /= 2.0
-    filters.append(f"atempo={remaining:.6f}")
+    if remaining > 1.0:
+        # Speed up: chain atempo=2.0 until remainder ≤ 2.0
+        while remaining > 2.0:
+            filters.append("atempo=2.0")
+            remaining /= 2.0
+        filters.append(f"atempo={remaining:.6f}")
+    else:
+        # Slow down: chain atempo=0.5 until remainder ≥ 0.5
+        while remaining < 0.5:
+            filters.append("atempo=0.5")
+            remaining /= 0.5
+        filters.append(f"atempo={remaining:.6f}")
 
     cmd = [
         "ffmpeg", "-y",
@@ -102,7 +118,7 @@ def _speed_up_audio_if_needed(
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         logger.warning(
-            "Audio speed-up failed (%s) — using original audio.", result.stderr[:200]
+            "Audio tempo adjustment failed (%s) — using original audio.", result.stderr[:200]
         )
         return audio_path, 1.0
     return output_path, speed_factor
@@ -201,6 +217,15 @@ def _compile_sync(
             "Ensure scene videos are fully generated."
         )
 
+    expected_scene_count = len(visual_plan.scenes)
+    if len(scene_nums) < expected_scene_count:
+        missing = set(range(1, expected_scene_count + 1)) - set(scene_nums)
+        logger.warning(
+            "Expected %d scenes from visual plan but only found %d on disk. "
+            "Missing scene(s): %s — they will be omitted from the final video.",
+            expected_scene_count, len(scene_nums), sorted(missing),
+        )
+
     # Map scene_num → speed_factor (1.0 means no change)
     scene_speed_factors: dict[int, float] = {}
     # Map scene_num → path of (possibly sped-up) audio
@@ -215,6 +240,16 @@ def _compile_sync(
         )
         scene_sub_videos[scene_num] = subs
 
+        # Target audio duration = total video window minus the end buffer.
+        # Use the actual sub-video count so scenes with fewer clips get the
+        # correct (shorter) target rather than a fixed 23 s cap.
+        scene_video_duration = len(subs) * SUB_VIDEO_DURATION_S
+        target_audio_duration = scene_video_duration - AUDIO_END_BUFFER_S
+        logger.info(
+            "Scene %d: %d sub-video(s) → %.1fs video window, target audio %.1fs",
+            scene_num, len(subs), scene_video_duration, target_audio_duration,
+        )
+
         audio_file = str(narration_dir / f"scene_{scene_num}.mp3")
         if not os.path.isfile(audio_file):
             logger.warning(
@@ -224,9 +259,9 @@ def _compile_sync(
             scene_audio_paths[scene_num] = audio_file
             continue
 
-        sped_audio_path = str(tmp_root / f"scene_{scene_num}_narration.mp3")
-        actual_audio, speed_factor = _speed_up_audio_if_needed(
-            audio_file, MAX_SCENE_AUDIO_S, sped_audio_path
+        adjusted_audio_path = str(tmp_root / f"scene_{scene_num}_narration.mp3")
+        actual_audio, speed_factor = _adjust_audio_to_target(
+            audio_file, target_audio_duration, adjusted_audio_path
         )
         scene_speed_factors[scene_num] = speed_factor
         scene_audio_paths[scene_num] = actual_audio
@@ -240,6 +275,18 @@ def _compile_sync(
         str(subtitled_dir),
         speed_factors=scene_speed_factors,
     )
+
+    # Safety net: ensure every raw sub-video has a subtitled counterpart.
+    # If burn_subtitles_per_scene skipped any (e.g. missing timestamp file),
+    # copy the raw video so it is not silently dropped from the final output.
+    for raw_file in raw_sub_files:
+        subtitled_counterpart = os.path.join(str(subtitled_dir), os.path.basename(raw_file))
+        if not os.path.isfile(subtitled_counterpart):
+            logger.warning(
+                "Subtitled version missing for %s — copying raw video as fallback.",
+                os.path.basename(raw_file),
+            )
+            shutil.copy2(raw_file, subtitled_counterpart)
 
     final_scene_paths: list[str] = []
 
@@ -266,9 +313,10 @@ def _compile_sync(
             )
             continue
 
-        # ── Step 4: mix narration audio into merged scene video ──────────────
+        # ── Step 4: lay narration audio onto merged scene video ──────────────
+        # Merged sub-videos carry no audio stream, so we always use "replace".
         final_scene_video = str(final_scenes_dir / f"scene_{scene_num}.mp4")
-        merge_audio(merged_video, actual_audio, final_scene_video, "mix")
+        merge_audio(merged_video, actual_audio, final_scene_video, "replace")
         final_scene_paths.append(final_scene_video)
 
     if not final_scene_paths:
@@ -278,6 +326,12 @@ def _compile_sync(
         )
 
     # ── Step 5: merge all final scene videos into one combined video ─────────
+    if len(final_scene_paths) < expected_scene_count:
+        logger.warning(
+            "Only %d of %d expected scenes produced final videos. "
+            "The missing scenes will not appear in the compiled video.",
+            len(final_scene_paths), expected_scene_count,
+        )
     logger.info("Compile step 5: merging %d scene(s) into combined video…", len(final_scene_paths))
     pre_music_path = str(output_path.parent / "story_pre_music.mp4")
     merge_videos(final_scene_paths, pre_music_path)
