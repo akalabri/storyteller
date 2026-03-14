@@ -1,11 +1,17 @@
 // ============================================================
-// Screen 2: Voice Conversation — real audio bridge
+// Screen 2: Voice Conversation
+//
+// MOCKUP MODE: The real audio bridge is commented out below.
+// To wire up the real backend, uncomment the real imports and
+// replace the MOCKUP SECTION with the real startConversation().
 // ============================================================
 
 import { createLogoHTML } from './landing.js';
 import { attachMotion } from '../utils/motion.js';
-import { openConversation, type ConvSocket } from '../utils/audio-bridge.js';
-import { startConversationSession } from '../utils/api.js';
+
+// ---- REAL IMPORTS (commented out for mockup) ----
+// import { openConversation, type ConvSocket } from '../utils/audio-bridge.js';
+// import { startConversationSession } from '../utils/api.js';
 
 interface ConvRefs {
   orb: HTMLElement;
@@ -18,9 +24,17 @@ interface ConvRefs {
 
 let refs: ConvRefs;
 let onFinishCb: ((sessionId: string) => void) | null = null;
-let convSocket: ConvSocket | null = null;
 
-// ---------- Helpers ----------
+// ---- REAL STATE (commented out for mockup) ----
+// let convSocket: ConvSocket | null = null;
+
+// ---- MOCKUP STATE ----
+let mockTimers: ReturnType<typeof setTimeout>[] = [];
+let mockFinished = false;
+
+// ============================================================
+// Helpers
+// ============================================================
 
 function setOrbState(mode: 'speaking' | 'listening' | 'processing' | 'idle') {
   refs.orb.classList.remove('speaking', 'listening');
@@ -47,55 +61,132 @@ function addMessage(text: string, sender: 'ai' | 'user') {
   refs.transcript.scrollTop = refs.transcript.scrollHeight;
 }
 
-// ---------- Core Flow ----------
+// ============================================================
+// MOCKUP: Scripted conversation
+// ============================================================
 
-export async function startConversation() {
+const MOCK_SCRIPT: Array<{ delay: number; speaker: 'ai' | 'user'; text: string; state?: 'speaking' | 'listening' | 'processing' }> = [
+  { delay: 800,  speaker: 'ai',   text: "Hi! I'm your AI story consultant. Tell me — what kind of story are you dreaming of today?", state: 'speaking' },
+  { delay: 4500, speaker: 'user', text: "I want a story about a young girl who discovers she can talk to stars.", state: 'listening' },
+  { delay: 6500, speaker: 'ai',   text: "Oh, I love that! A cosmic connection story. Is this more of a whimsical fairy tale, or something with a deeper emotional journey?", state: 'speaking' },
+  { delay: 11000, speaker: 'user', text: "Definitely emotional. She's lonely and the stars become her only friends.", state: 'listening' },
+  { delay: 13000, speaker: 'ai',   text: "Beautiful. So we have isolation, wonder, and friendship across the universe. What's the setting — present day, or something more fantastical?", state: 'speaking' },
+  { delay: 18000, speaker: 'user', text: "A small coastal town, present day. She goes to the beach at night to talk to them.", state: 'listening' },
+  { delay: 20000, speaker: 'ai',   text: "Perfect. I'm picturing moonlit waves, a girl sitting on rocks, whispering to the sky. Does she go on a journey, or is it more of an internal transformation?", state: 'speaking' },
+  { delay: 25500, speaker: 'user', text: "She eventually learns that the stars have been guiding her toward making a real friend.", state: 'listening' },
+  { delay: 27500, speaker: 'ai',   text: "That's a stunning arc — cosmic mentorship leading to human connection. I have everything I need. Let me start crafting your story!", state: 'speaking' },
+];
+
+function runMockConversation() {
+  mockFinished = false;
+  const mockSessionId = 'mock-session-' + Date.now();
+
+  refs.sessionLabel.textContent = `Session: ${mockSessionId.slice(0, 8)}`;
   refs.statusLabel.textContent = 'Connecting...';
 
-  try {
-    // 1. Create session
-    const { session_id } = await startConversationSession();
-
-    // Show session id
-    refs.sessionLabel.textContent = `Session: ${session_id.slice(0, 8)}`;
-
-    // 2. Open live audio bridge
-    convSocket = await openConversation(
-      session_id,
-      (state) => setOrbState(state),
-      (speaker, text) => addMessage(text, speaker),
-      () => onFinishCb?.(session_id),
-      (msg) => {
-        addMessage(`Error: ${msg}`, 'ai');
-        setOrbState('idle');
-        refs.statusLabel.textContent = 'Connection lost';
-        refs.finishBtn.textContent = '↻ Retry conversation';
-        refs.finishBtn.onclick = () => {
-          resetConversation();
-          startConversation();
-        };
-      },
-    );
-
+  const connectTimer = setTimeout(() => {
     refs.statusLabel.textContent = 'Connected';
     refs.finishBtn.classList.add('visible');
     setOrbState('listening');
-  } catch (err: any) {
-    refs.statusLabel.textContent = 'Connection failed';
-    addMessage(`Could not connect: ${err?.message ?? err}`, 'ai');
-  }
+  }, 600);
+  mockTimers.push(connectTimer);
+
+  MOCK_SCRIPT.forEach(({ delay, speaker, text, state }) => {
+    const t = setTimeout(() => {
+      if (mockFinished) return;
+      if (state) setOrbState(state);
+      // Small pause before message appears (simulates speech)
+      const msgTimer = setTimeout(() => {
+        if (mockFinished) return;
+        addMessage(text, speaker);
+        if (speaker === 'ai') {
+          // After AI speaks, switch to listening
+          const listenTimer = setTimeout(() => {
+            if (!mockFinished) setOrbState('listening');
+          }, 1200);
+          mockTimers.push(listenTimer);
+        }
+      }, 400);
+      mockTimers.push(msgTimer);
+    }, delay);
+    mockTimers.push(t);
+  });
+
+  // After last message, show "processing" then auto-trigger finish
+  const lastDelay = MOCK_SCRIPT[MOCK_SCRIPT.length - 1].delay + 3000;
+  const finishTimer = setTimeout(() => {
+    if (mockFinished) return;
+    setOrbState('processing');
+    refs.statusLabel.textContent = 'Wrapping up conversation...';
+    refs.finishBtn.disabled = true;
+
+    const doneTimer = setTimeout(() => {
+      if (mockFinished) return;
+      mockFinished = true;
+      onFinishCb?.(mockSessionId);
+    }, 1500);
+    mockTimers.push(doneTimer);
+  }, lastDelay);
+  mockTimers.push(finishTimer);
+}
+
+// ============================================================
+// Core Flow (exported)
+// ============================================================
+
+export async function startConversation() {
+  // ---- MOCKUP MODE ----
+  runMockConversation();
+
+  // ---- REAL IMPLEMENTATION (uncomment to use) ----
+  // refs.statusLabel.textContent = 'Connecting...';
+  // try {
+  //   const { session_id } = await startConversationSession();
+  //   refs.sessionLabel.textContent = `Session: ${session_id.slice(0, 8)}`;
+  //   convSocket = await openConversation(
+  //     session_id,
+  //     (state) => setOrbState(state),
+  //     (speaker, text) => addMessage(text, speaker),
+  //     () => onFinishCb?.(session_id),
+  //     (msg) => {
+  //       addMessage(`Error: ${msg}`, 'ai');
+  //       setOrbState('idle');
+  //       refs.statusLabel.textContent = 'Connection lost';
+  //       refs.finishBtn.textContent = '↻ Retry conversation';
+  //       refs.finishBtn.onclick = () => { resetConversation(); startConversation(); };
+  //     },
+  //   );
+  //   refs.statusLabel.textContent = 'Connected';
+  //   refs.finishBtn.classList.add('visible');
+  //   setOrbState('listening');
+  // } catch (err: any) {
+  //   refs.statusLabel.textContent = 'Connection failed';
+  //   addMessage(`Could not connect: ${err?.message ?? err}`, 'ai');
+  // }
 }
 
 export function resetConversation() {
-  convSocket?.close();
-  convSocket = null;
+  // Clear all mock timers
+  mockTimers.forEach(clearTimeout);
+  mockTimers = [];
+  mockFinished = true;
+
+  // ---- REAL CLEANUP (uncomment to use) ----
+  // convSocket?.close();
+  // convSocket = null;
+
   if (refs?.transcript) refs.transcript.innerHTML = '';
-  if (refs?.finishBtn) refs.finishBtn.classList.remove('visible');
+  if (refs?.finishBtn) {
+    refs.finishBtn.classList.remove('visible');
+    refs.finishBtn.disabled = false;
+  }
   if (refs?.statusLabel) refs.statusLabel.textContent = '';
   if (refs?.sessionLabel) refs.sessionLabel.textContent = '';
 }
 
-// ---------- Create Screen ----------
+// ============================================================
+// Create Screen
+// ============================================================
 
 export function createConversationScreen(
   onFinish: (sessionId: string) => void
@@ -159,7 +250,20 @@ export function createConversationScreen(
   };
 
   refs.finishBtn.addEventListener('click', () => {
-    convSocket?.sendEndSession();
+    // ---- MOCKUP: skip to end immediately ----
+    mockTimers.forEach(clearTimeout);
+    mockTimers = [];
+    if (!mockFinished) {
+      mockFinished = true;
+      setOrbState('processing');
+      refs.statusLabel.textContent = 'Wrapping up conversation...';
+      refs.finishBtn.disabled = true;
+      const mockSessionId = refs.sessionLabel.textContent?.replace('Session: ', '') || 'mock-session-' + Date.now();
+      setTimeout(() => onFinishCb?.(mockSessionId), 800);
+    }
+
+    // ---- REAL: send end session (uncomment to use) ----
+    // convSocket?.sendEndSession();
   });
 
   attachMotion(screen);

@@ -1978,3 +1978,247 @@ body {
   line-height: 1.6;
 }
 .video-actions { margin-top: 10px; }
+
+/* ============================================================
+   Generation Queue — floating bottom-right 9:16 portrait cards
+   ============================================================ */
+
+.generation-queue {
+  position: fixed;
+  bottom: 28px;
+  right: 28px;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 12px;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+/*
+  9:16 portrait card — width 100px → height 178px
+  The card itself clips the inner content.
+  The animated border lives on a ::before pseudo that sits OUTSIDE
+  via a wrapper (.gen-card-border) so overflow:hidden on the card
+  doesn't clip it.
+*/
+.gen-card-wrap {
+  position: relative;
+  width: 100px;
+  aspect-ratio: 9 / 16;
+  border-radius: 14px;
+  pointer-events: all;
+  animation: gen-card-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  transition: transform 0.2s ease;
+}
+
+.gen-card-wrap:hover {
+  transform: scale(1.04) translateY(-3px);
+}
+
+/* Slide-in from right */
+@keyframes gen-card-in {
+  from { opacity: 0; transform: translateX(24px) scale(0.92); }
+  to   { opacity: 1; transform: translateX(0)   scale(1); }
+}
+
+/* Fade-out when dismissed */
+.gen-card-wrap.gen-card-out {
+  animation: gen-card-out 0.45s ease forwards;
+}
+@keyframes gen-card-out {
+  to { opacity: 0; transform: translateX(18px) scale(0.9); }
+}
+
+/* ---- Animated spinning border (conic-gradient) ---- */
+.gen-card-wrap::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 16px;
+  background: conic-gradient(
+    from var(--border-angle, 0deg),
+    transparent 0deg,
+    #a68a64 60deg,
+    #d4b896 90deg,
+    #a68a64 120deg,
+    transparent 180deg
+  );
+  animation: gen-border-spin 2s linear infinite;
+  z-index: 0;
+}
+@property --border-angle {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes gen-border-spin {
+  to { --border-angle: 360deg; }
+}
+
+/* When done — border turns green */
+.gen-card-wrap.gen-card-done::before {
+  background: conic-gradient(
+    from var(--border-angle, 0deg),
+    transparent 0deg,
+    #34c759 60deg,
+    #5dde7a 90deg,
+    #34c759 120deg,
+    transparent 180deg
+  );
+  animation: none;
+}
+
+/* Inner card clips content, sits above the border layer */
+.gen-card {
+  position: absolute;
+  inset: 2px;
+  border-radius: 12px;
+  overflow: hidden;
+  z-index: 1;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+}
+
+/* ---- Inner background ---- */
+.gen-card-bg {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(160deg, #1e1812 0%, #2a2218 60%, #1a1510 100%);
+}
+
+/* Placeholder image — dimmed behind the spinner */
+.gen-card-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url('/assets/generating_placeholder.png') center / cover no-repeat;
+  opacity: 0.18;
+  border-radius: inherit;
+}
+
+/* Animated shimmer scan line */
+.gen-card-scan {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(166, 138, 100, 0.05) 46%,
+    rgba(166, 138, 100, 0.13) 50%,
+    rgba(166, 138, 100, 0.05) 54%,
+    transparent 100%
+  );
+  background-size: 100% 300%;
+  animation: gen-scan 2.6s ease-in-out infinite;
+}
+@keyframes gen-scan {
+  0%   { background-position: 0% 0%; }
+  100% { background-position: 0% 100%; }
+}
+
+/* Spinner arc in center */
+.gen-card-spinner-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gen-card-spinner {
+  width: 36px;
+  height: 36px;
+  animation: gen-spin 1.5s linear infinite;
+}
+.gen-card-spinner .arc {
+  stroke: #a68a64;
+  stroke-linecap: round;
+  animation: gen-arc-dash 1.5s ease-in-out infinite;
+}
+@keyframes gen-spin {
+  100% { transform: rotate(360deg); }
+}
+@keyframes gen-arc-dash {
+  0%   { stroke-dasharray: 1, 118; stroke-dashoffset: 0; }
+  50%  { stroke-dasharray: 90, 29; stroke-dashoffset: -28; }
+  100% { stroke-dasharray: 1, 118; stroke-dashoffset: -119; }
+}
+
+/* Label at bottom */
+.gen-card-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 8px 7px;
+  background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.gen-card-label-text {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.7);
+  text-transform: uppercase;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gen-card-label-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #a68a64;
+  flex-shrink: 0;
+  animation: gen-dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes gen-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.35; transform: scale(0.65); }
+}
+
+/* ---- Done state ---- */
+.gen-card-wrap.gen-card-done .gen-card-bg {
+  background: linear-gradient(160deg, #0d2010 0%, #122818 60%, #0a1e0d 100%);
+}
+.gen-card-wrap.gen-card-done .gen-card-bg::after {
+  opacity: 0.12;
+}
+.gen-card-wrap.gen-card-done .gen-card-scan {
+  animation: none;
+  opacity: 0;
+}
+.gen-card-wrap.gen-card-done .gen-card-spinner-wrap {
+  display: none;
+}
+.gen-card-wrap.gen-card-done .gen-card-label-dot {
+  background: #34c759;
+  animation: none;
+}
+.gen-card-wrap.gen-card-done .gen-card-label-text {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* Green checkmark overlay */
+.gen-card-check {
+  display: none;
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+}
+.gen-card-wrap.gen-card-done .gen-card-check {
+  display: flex;
+}
+.gen-card-check svg {
+  width: 40px;
+  height: 40px;
+  filter: drop-shadow(0 0 10px rgba(52, 199, 89, 0.65));
+  animation: gen-check-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes gen-check-pop {
+  from { opacity: 0; transform: scale(0.3); }
+  to   { opacity: 1; transform: scale(1); }
+}

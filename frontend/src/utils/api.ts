@@ -79,30 +79,69 @@ export const getDevMode = async () => ({ dev_mode: true, dev_session_id: 'mock-d
 
 export const videoUrl = (sessionId: string) => 'https://www.w3schools.com/html/mov_bbb.mp4';
 
+// ---- REAL openProgressSocket (uncomment to use) ----
+// export function openProgressSocket(
+//   sessionId: string,
+//   onEvent: (e: any) => void,
+//   onClose?: () => void
+// ): () => void {
+//   const ws = new WebSocket(`ws://localhost:8001/ws/${sessionId}`);
+//   ws.onmessage = (ev) => {
+//     try { onEvent(JSON.parse(ev.data)); } catch {}
+//   };
+//   ws.onclose = () => onClose?.();
+//   return () => ws.close();
+// }
+
+// ---- MOCK openProgressSocket ----
+// Simulates all 7 pipeline steps with realistic timing.
+// Each step fires a 'started' event then a 'done' event.
+// After all steps, fires { step: 'pipeline', status: 'done' }.
 export function openProgressSocket(
   sessionId: string,
   onEvent: (e: any) => void,
   onClose?: () => void
 ): () => void {
-  // Mock WebSocket by sending progress events via setTimeout
-  let step = 0;
-  const steps = ['story_breakdown', 'narration', 'scene_images', 'pipeline'];
-  
-  const timer = setInterval(() => {
-    if (step >= steps.length) {
-      clearInterval(timer);
+  const STEPS = [
+    { key: 'story_breakdown',  durationMs: 2200 },
+    { key: 'narration',        durationMs: 2800 },
+    { key: 'character_images', durationMs: 3200 },
+    { key: 'scene_prompts',    durationMs: 2000 },
+    { key: 'scene_images',     durationMs: 4000 },
+    { key: 'scene_videos',     durationMs: 5500 },
+    { key: 'compile',          durationMs: 2500 },
+  ];
+
+  const timers: ReturnType<typeof setTimeout>[] = [];
+  let cursor = 0;
+
+  function scheduleNext() {
+    if (cursor >= STEPS.length) {
+      const t = setTimeout(() => {
+        onEvent({ step: 'pipeline', status: 'done' });
+        onClose?.();
+      }, 400);
+      timers.push(t);
       return;
     }
-    
-    if (steps[step] === 'pipeline') {
-      onEvent({ step: 'pipeline', status: 'done' });
-      onClose?.();
-      clearInterval(timer);
-    } else {
-      onEvent({ step: steps[step], status: 'done' });
-    }
-    step++;
-  }, 2000);
 
-  return () => clearInterval(timer);
+    const { key, durationMs } = STEPS[cursor];
+    cursor++;
+
+    // Fire 'started'
+    onEvent({ step: key, status: 'started' });
+
+    // Fire 'done' after duration, then move to next step
+    const t = setTimeout(() => {
+      onEvent({ step: key, status: 'done' });
+      scheduleNext();
+    }, durationMs);
+    timers.push(t);
+  }
+
+  // Small initial delay to simulate backend spin-up
+  const initTimer = setTimeout(scheduleNext, 800);
+  timers.push(initTimer);
+
+  return () => timers.forEach(clearTimeout);
 }

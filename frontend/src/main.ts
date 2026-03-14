@@ -71,33 +71,81 @@ let sessionId = '';
 let manager: ScreenManager;
 
 // ============================================================
-// Queue Management
+// Queue Management — 9:16 portrait card per generation
 // ============================================================
 
-const activeGenerations = new Set<string>();
+const genEntries = new Set<string>();
+let queueContainer: HTMLElement | null = null;
 
-function updateGenerationQueue() {
-  const container = document.getElementById('global-overlays');
-  if (!container) return;
-
-  if (activeGenerations.size === 0) {
-    container.innerHTML = '';
-    return;
+function ensureQueueWrapper(): HTMLElement {
+  if (!queueContainer) queueContainer = document.getElementById('global-overlays');
+  let wrapper = queueContainer!.querySelector<HTMLElement>('.generation-queue');
+  if (!wrapper) {
+    wrapper = document.createElement('div');
+    wrapper.className = 'generation-queue';
+    queueContainer!.appendChild(wrapper);
   }
+  return wrapper;
+}
 
-  // Draw queue in bottom right
-  container.innerHTML = `
-    <div class="generation-queue">
-      ${Array.from(activeGenerations).map(id => `
-        <div class="gen-ring" title="Generating Video ${id.substring(0,6)}...">
-          <svg class="gen-ring-spinner" viewBox="0 0 50 50">
-            <circle class="path" cx="25" cy="25" r="20" fill="none" stroke-width="4"></circle>
+// Selector targets the outer wrap (which holds done/out classes)
+function getWrapEl(sid: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`.gen-card-wrap[data-sid="${sid}"]`);
+}
+
+function buildCardHTML(sid: string): string {
+  return `
+    <div class="gen-card-wrap" data-sid="${sid}">
+      <div class="gen-card">
+        <div class="gen-card-bg"></div>
+        <div class="gen-card-scan"></div>
+        <div class="gen-card-spinner-wrap">
+          <svg class="gen-card-spinner" viewBox="0 0 50 50" fill="none">
+            <circle class="arc" cx="25" cy="25" r="19" stroke-width="3.5"/>
           </svg>
-          <div class="gen-ring-core">🎬</div>
         </div>
-      `).join('')}
+        <div class="gen-card-check">
+          <svg viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="26" cy="26" r="24" fill="rgba(52,199,89,0.18)" stroke="#34c759" stroke-width="2"/>
+            <path d="M15 26.5L22.5 34L37 19" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="gen-card-label">
+          <div class="gen-card-label-dot"></div>
+          <span class="gen-card-label-text">Generating…</span>
+        </div>
+      </div>
     </div>
   `;
+}
+
+function addGenCard(sid: string) {
+  genEntries.add(sid);
+  const wrapper = ensureQueueWrapper();
+  const tmp = document.createElement('div');
+  tmp.innerHTML = buildCardHTML(sid);
+  wrapper.appendChild(tmp.firstElementChild as HTMLElement);
+}
+
+function markGenCardDone(sid: string) {
+  const wrap = getWrapEl(sid);
+  if (!wrap) return;
+  wrap.classList.add('gen-card-done');
+  const labelEl = wrap.querySelector<HTMLElement>('.gen-card-label-text');
+  if (labelEl) labelEl.textContent = 'Story ready!';
+  setTimeout(() => dismissGenCard(sid), 4000);
+}
+
+function dismissGenCard(sid: string) {
+  const wrap = getWrapEl(sid);
+  if (!wrap) return;
+  wrap.classList.add('gen-card-out');
+  setTimeout(() => {
+    wrap.remove();
+    genEntries.delete(sid);
+    const wrapper = queueContainer?.querySelector('.generation-queue');
+    if (wrapper && wrapper.children.length === 0) wrapper.remove();
+  }, 450);
 }
 
 // ============================================================
@@ -113,16 +161,11 @@ function buildConversationScreen() {
 }
 
 function startBackgroundGeneration(sid: string) {
-  // Add to background queue instead of blocking
-  activeGenerations.add(sid);
-  updateGenerationQueue();
-  
-  // Create generating screen in background to handle the WebSocket/Polling logic silently
+  addGenCard(sid);
+
   const gen = createGeneratingScreen(sid, (completedSid) => {
-    // When done, remove from queue
-    activeGenerations.delete(completedSid);
-    updateGenerationQueue();
-    
+    markGenCardDone(completedSid);
+
     addStory({
       id: completedSid,
       title: 'Your Masterpiece',
@@ -134,15 +177,11 @@ function startBackgroundGeneration(sid: string) {
 
     sessionId = completedSid;
     buildStoryScreen(true);
-    // Don't show story automatically — we just update the background generations queue
-    // and rely on the UI (carousel) to display it later.
+    // Story added to carousel; user can click it from there.
     // manager.show('story');
   });
-  
-  // Register but don't show it
+
   manager.replace('generating', gen);
-  
-  // Go back to landing while it generates
   manager.show('landing');
 }
 
@@ -224,7 +263,7 @@ async function buildApp() {
 
   // ---- Show initial screen ----
   const previewParam = new URLSearchParams(window.location.search).get('preview');
-  if (previewParam === '2') {
+  if (previewParam === '2' || previewParam === 'conv') {
     buildConversationScreen();
     manager.show('conversation');
     startConversation();
@@ -233,6 +272,12 @@ async function buildApp() {
   } else if (previewParam === '4') {
     buildStoryScreen();
     manager.show('story');
+  } else if (previewParam === 'ring') {
+    // Preview: land on home with two fake generation cards (shows multi-generation layout)
+    manager.show('landing');
+    const t = Date.now();
+    startBackgroundGeneration('mock-ring-1-' + t);
+    setTimeout(() => startBackgroundGeneration('mock-ring-2-' + t), 1200);
   } else {
     manager.show('landing');
   }
