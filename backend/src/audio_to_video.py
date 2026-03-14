@@ -41,7 +41,6 @@ def merge(VIDEO_FILE, AUDIO_FILE, OUTPUT_FILE, MODE):
             "-map", "1:a",
             "-c:v", "copy",
             "-c:a", "aac",
-            "-shortest",
             OUTPUT_FILE
         ]
     elif MODE == "mix":
