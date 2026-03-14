@@ -23,7 +23,7 @@ const FLASK_SVG_LIGHT = `<svg class="logo-icon" viewBox="0 0 36 36" fill="none" 
 export function createLogoHTML(dark = false): string {
   return `<div class="logo">
     ${dark ? FLASK_SVG_DARK : FLASK_SVG_LIGHT}
-    <span class="logo-text" style="color:${dark ? '#ede0d4' : '#FFFFFF'}">AI Stories Lab</span>
+    <span class="logo-text" style="color:${dark ? '#ede0d4' : '#FFFFFF'}">Vibe Story Lab</span>
   </div>`;
 }
 
@@ -42,7 +42,7 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
       </nav>
 
       <div class="landing-pink-content">
-        <p class="landing-tagline">Story Vibe Lab</p>
+        <p class="landing-tagline">Vibe Story Lab</p>
       </div>
 
       <!-- Curved wave into dark -->
@@ -101,41 +101,33 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
 
   `;
 
-  const MOCK_CARDS = [
-    { title: 'The Last Oasis', image: '/assets/landing_page_thumnails/Whisk_34215111e3c2c32b8924c7555820b080dr.jpeg' },
-    { title: 'Whispers of the Forest', image: '/assets/landing_page_thumnails/Whisk_4e5dd3de454e24d9c3f434d5c1027e82dr.jpeg' },
-    { title: 'Storm Rider', image: '/assets/landing_page_thumnails/Whisk_80a9a299b7bede0a0314d6dc6b3717bedr.jpeg' },
-    { title: 'The Forgotten City', image: '/assets/landing_page_thumnails/Whisk_95165b961c53ab9874349fcef3bbe219dr.jpeg' },
-    { title: 'Dragon\'s Ember', image: '/assets/landing_page_thumnails/Whisk_a8f87e565478c5ba6f048160061d948adr.jpeg' },
-  ];
-
-  // Render carousel
+  // Render carousel from real store only
   function renderCarousel() {
     const track = screen.querySelector<HTMLElement>('#carousel-track');
     if (!track) return;
     track.innerHTML = '';
 
-    // Use real stories if available, padded/capped to 5; fall back to mock cards
-    let itemsToRender: { title: string; image: string; id?: string }[] = [...storiesStore];
-    if (itemsToRender.length === 0) {
-      itemsToRender = MOCK_CARDS;
-    } else {
-      while (itemsToRender.length < 5) {
-        itemsToRender = [...itemsToRender, ...storiesStore];
-      }
-      itemsToRender = itemsToRender.slice(0, 5);
+    if (storiesStore.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'carousel-empty';
+      empty.innerHTML = `
+        <p class="carousel-empty-text">Your masterpieces will appear here once you generate a story.</p>
+      `;
+      track.appendChild(empty);
+      return;
     }
 
-    itemsToRender.forEach(story => {
+    storiesStore.forEach(story => {
       const card = document.createElement('div');
       card.className = 'carousel-card';
       card.innerHTML = `
         <img src="${story.image}" alt="${story.title}" loading="lazy" />
         <span class="carousel-card-title">${story.title}</span>
       `;
-      if (story.id) {
-        card.addEventListener('click', () => onStorySelect(story.id!));
-      }
+      card.addEventListener('click', () => {
+        console.log('[Landing] Story card clicked:', story.id);
+        onStorySelect(story.id);
+      });
       track.appendChild(card);
     });
   }
@@ -158,10 +150,10 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
 
   const startBtn = screen.querySelector<HTMLButtonElement>('#start-btn');
   startBtn?.addEventListener('click', () => {
+    console.log('[Landing] Start Conversation clicked');
     setTimeout(onStart, 180);
   });
 
   attachMotion(screen);
   return screen;
 }
-
