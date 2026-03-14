@@ -9,8 +9,8 @@ import {
   getStatus,
   getState,
   getVideo,
+  getThumbnailUrl,
   retryFailedScenes,
-  recompileVideo,
   type StepStatus,
 } from '../utils/api.js';
 
@@ -251,6 +251,15 @@ export function createGeneratingScreen(
 // SCREEN 4 — Story Ready (Video Page)
 // ============================================================
 
+const PENCIL_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+</svg>`;
+
+const SPARKLE_ICON = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+  <path d="M12 2l2.09 6.43H21l-5.47 3.97 2.09 6.43L12 14.87l-5.62 3.96 2.09-6.43L3 8.43h6.91z"/>
+</svg>`;
+
 export function createStoryScreen(
   sessionId: string,
   onBack: () => void,
@@ -279,7 +288,10 @@ export function createStoryScreen(
         ></video>
       </div>
       <div class="video-details-section">
-        <div class="badge-ready" id="version-badge">Masterpiece</div>
+        <div class="video-version-badge" id="version-badge">
+          ${SPARKLE_ICON}
+          <span id="version-text">Loading…</span>
+        </div>
         <h1 class="video-title" id="story-title">Loading...</h1>
         <p class="video-desc" id="story-desc"></p>
         <div class="video-actions" id="video-actions"></div>
@@ -291,59 +303,21 @@ export function createStoryScreen(
   const descEl = screen.querySelector<HTMLElement>('#story-desc');
   const videoEl = screen.querySelector<HTMLVideoElement>('#story-video');
   const actionsEl = screen.querySelector<HTMLElement>('#video-actions');
-  const versionBadge = screen.querySelector<HTMLElement>('#version-badge');
+  const versionTextEl = screen.querySelector<HTMLElement>('#version-text');
 
   if (actionsEl) {
     const editBtn = document.createElement('button');
-    editBtn.className = 'btn-primary';
-    editBtn.textContent = 'Edit Video';
+    editBtn.className = 'btn-edit-story';
     editBtn.id = 'edit-video-btn';
+    editBtn.innerHTML = `${PENCIL_ICON} Edit Story`;
     editBtn.addEventListener('click', () => {
-      console.log('[StoryScreen] Edit Video clicked for session:', sessionId);
+      console.log('[StoryScreen] Edit Story clicked for session:', sessionId);
       onEdit(sessionId);
     });
     actionsEl.appendChild(editBtn);
-
-    const recompileBtn = document.createElement('button');
-    recompileBtn.className = 'btn-outline';
-    recompileBtn.textContent = 'Recompile';
-    recompileBtn.id = 'recompile-btn';
-    recompileBtn.addEventListener('click', async () => {
-      console.log('[StoryScreen] Recompile clicked for session:', sessionId);
-      recompileBtn.disabled = true;
-      recompileBtn.textContent = 'Recompiling...';
-      try {
-        await recompileVideo(sessionId);
-        const poll = setInterval(async () => {
-          try {
-            const st = await getStatus(sessionId);
-            if (st.status === 'done') {
-              clearInterval(poll);
-              const vd = await getVideo(sessionId);
-              if (videoEl) {
-                videoEl.src = vd.video_url;
-                videoEl.load();
-              }
-              if (versionBadge) versionBadge.textContent = `Version ${vd.version}`;
-              recompileBtn.disabled = false;
-              recompileBtn.textContent = 'Recompile';
-            } else if (st.status === 'error') {
-              clearInterval(poll);
-              recompileBtn.disabled = false;
-              recompileBtn.textContent = 'Recompile';
-            }
-          } catch { /* keep polling */ }
-        }, 3000);
-      } catch (err: any) {
-        console.error('[StoryScreen] Recompile failed:', err);
-        recompileBtn.disabled = false;
-        recompileBtn.textContent = 'Recompile';
-      }
-    });
-    actionsEl.appendChild(recompileBtn);
   }
 
-  // Fetch video and story details from backend
+  // Fetch video, thumbnail, and story details from backend
   (async () => {
     try {
       console.log('[StoryScreen] Fetching video for session:', sessionId);
@@ -355,9 +329,14 @@ export function createStoryScreen(
       if (videoEl) {
         videoEl.src = videoData.video_url;
         console.log('[StoryScreen] Video URL set:', videoData.video_url, 'version:', videoData.version);
+        // Load first-scene thumbnail as poster from MinIO
+        getThumbnailUrl(sessionId)
+          .then(url => { videoEl.poster = url; })
+          .catch(err => console.warn('[StoryScreen] Thumbnail not available:', err));
       }
-      if (versionBadge) {
-        versionBadge.textContent = `Version ${videoData.version}`;
+
+      if (versionTextEl) {
+        versionTextEl.textContent = `Version ${videoData.version}`;
       }
 
       if (stateData?.breakdown) {
@@ -370,6 +349,7 @@ export function createStoryScreen(
       console.error('[StoryScreen] Failed to load video/state:', err);
       if (titleEl) titleEl.textContent = 'Your Story';
       if (descEl) descEl.textContent = 'Could not load story details.';
+      if (versionTextEl) versionTextEl.textContent = 'Masterpiece';
     }
   })();
 

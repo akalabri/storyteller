@@ -2090,6 +2090,70 @@ body {
 }
 .video-actions { margin-top: 8px; }
 
+/* Version badge */
+.video-version-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(240, 180, 80, 0.10);
+  border: 1px solid rgba(240, 180, 80, 0.28);
+  color: #f0c98a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 5px 13px;
+  border-radius: 99px;
+}
+.video-version-badge svg {
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+/* Edit Story button */
+.btn-edit-story {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: linear-gradient(135deg, #c4782a, #e8a040);
+  color: #1a0d00;
+  font-family: var(--font);
+  font-size: 16px;
+  font-weight: 700;
+  height: 56px;
+  padding: 0 36px;
+  border: none;
+  border-radius: 99px;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  box-shadow: 0 8px 32px rgba(196, 120, 42, 0.42),
+              0 2px 8px rgba(0, 0, 0, 0.28);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+.btn-edit-story::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: white;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.btn-edit-story:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 44px rgba(196, 120, 42, 0.58),
+              0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.btn-edit-story:hover::after { opacity: 0.06; }
+.btn-edit-story:active { transform: translateY(0); }
+.btn-edit-story:active::after { opacity: 0.12; }
+.btn-edit-story svg {
+  flex-shrink: 0;
+}
+
 /* Stack on small screens */
 @media (max-width: 720px) {
   .video-content-container {
