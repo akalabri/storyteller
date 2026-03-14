@@ -1,20 +1,39 @@
+// ============================================================
+// Stories store — backed by localStorage so it survives refresh
+// ============================================================
+
+const STORAGE_KEY = 'storyteller-stories';
+
 export interface Story {
   id: string;
   title: string;
   desc: string;
   image: string;
   videoUrl: string;
-  isUserGenerated: boolean;
+  version?: number;
 }
 
-// Initial mock state
-export const storiesStore: Story[] = [
-  { id: 'mock-1', title: 'The Cybernetic Dawn', desc: 'A rogue AI discovers emotion.', image: '/assets/thumnail_mockup.png', videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', isUserGenerated: false },
-  { id: 'mock-2', title: 'Echoes of Eternity', desc: 'Timeless love across dimensions.', image: '/assets/thumnail_mockup.png', videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', isUserGenerated: false },
-  { id: 'mock-3', title: 'Neon Shadows', desc: 'A detective in a dystopian future.', image: '/assets/thumnail_mockup.png', videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', isUserGenerated: false },
-  { id: 'mock-4', title: 'Whispers from the Void', desc: 'Space explorers find something ancient.', image: '/assets/thumnail_mockup.png', videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', isUserGenerated: false },
-  { id: 'mock-5', title: 'The Last Oasis', desc: 'Survival in a desolate wasteland.', image: '/assets/thumnail_mockup.png', videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4', isUserGenerated: false },
-];
+function loadFromStorage(): Story[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as Story[];
+  } catch (err) {
+    console.warn('[Store] Failed to load stories from localStorage:', err);
+  }
+  return [];
+}
+
+function saveToStorage(stories: Story[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stories));
+  } catch (err) {
+    console.warn('[Store] Failed to save stories to localStorage:', err);
+  }
+}
+
+export const storiesStore: Story[] = loadFromStorage();
 
 type Listener = () => void;
 const listeners: Listener[] = [];
@@ -24,7 +43,15 @@ export function subscribeToStories(listener: Listener) {
 }
 
 export function addStory(story: Story) {
-  storiesStore.unshift(story);
+  // Replace existing entry for same session (e.g. after edit produces new version)
+  const idx = storiesStore.findIndex(s => s.id === story.id);
+  if (idx !== -1) {
+    storiesStore[idx] = story;
+  } else {
+    storiesStore.unshift(story);
+  }
+  saveToStorage(storiesStore);
+  console.log('[Store] Story added/updated:', story.id, story.title);
   listeners.forEach(l => l());
 }
 

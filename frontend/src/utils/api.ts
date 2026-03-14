@@ -1,147 +1,143 @@
 // ============================================================
 // API utilities — wired to real FastAPI backend
+// All calls go through the Vite proxy (/api → backend:8000)
 // ============================================================
 
 const BASE = (import.meta.env.VITE_API_BASE_URL as string) ?? '';
 
 async function post<T>(path: string, body: unknown): Promise<T> {
+  console.log(`[API] POST ${path}`, body);
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`POST ${path} → ${res.status}: ${await res.text()}`);
-  return res.json();
+  if (!res.ok) {
+    const text = await res.text();
+    console.error(`[API] POST ${path} → ${res.status}:`, text);
+    let message = text;
+    try {
+      const json = JSON.parse(text) as { detail?: string };
+      if (typeof json.detail === 'string') message = json.detail;
+    } catch {
+      /* use raw text */
+    }
+    throw new Error(message || `Request failed (${res.status})`);
+  }
+  const data = await res.json();
+  console.log(`[API] POST ${path} ← 200`, data);
+  return data;
 }
 
 async function get<T>(path: string): Promise<T> {
+  console.log(`[API] GET ${path}`);
   const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) throw new Error(`GET ${path} → ${res.status}: ${await res.text()}`);
-  return res.json();
+  if (!res.ok) {
+    const text = await res.text();
+    console.error(`[API] GET ${path} → ${res.status}:`, text);
+    let message = text;
+    try {
+      const json = JSON.parse(text) as { detail?: string };
+      if (typeof json.detail === 'string') message = json.detail;
+    } catch {
+      /* use raw text */
+    }
+    throw new Error(message || `Request failed (${res.status})`);
+  }
+  const data = await res.json();
+  console.log(`[API] GET ${path} ← 200`, data);
+  return data;
 }
+
+// ---- Response types ----
 
 export interface SessionResponse {
   session_id: string;
 }
 
+export interface StepStatus {
+  step: string;
+  status: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+  message?: string;
+}
+
 export interface StatusResponse {
-  status: string;
-  steps: any[];
-  errors: string[];
-  final_video_path: string | null;
-}
-
-export interface EditResponse {
   session_id: string;
-  dirty_keys: string[];
-  reasoning: string;
+  status: 'idle' | 'running' | 'done' | 'error' | 'editing';
+  video_version: number;
+  has_video: boolean;
+  steps: StepStatus[];
+  errors: string[];
 }
 
-export interface DevModeResponse {
-  dev_mode: boolean;
-  dev_session_id: string | null;
-  dev_steps: string[];
+export interface VideoResponse {
+  video_url: string;
+  version: number;
 }
 
-export const startConversationSession = async () => ({ session_id: 'mock-session-' + Date.now() });
-
-export const startGeneration = async (sessionId: string) => {
-  return { session_id: sessionId };
-};
-
-export const getStatus = async (sessionId: string) => {
-  return {
-    status: 'running',
-    steps: [{ status: 'done', name: 'Starting mock generation' }],
-    errors: [],
-    final_video_path: null
+export interface StateResponse {
+  breakdown?: {
+    title?: string;
+    premise?: string;
+    genre?: string;
+    setting?: string;
+    mood?: string;
+    characters?: Array<{ name: string; role: string }>;
   };
-};
+}
 
-export const getState = async (sessionId: string) => {
-  return {
-    breakdown: {
-      title: 'Mocked Story Title',
-      premise: 'This is a mocked story generated completely locally.',
-      genre: 'Sci-Fi',
-      setting: 'Cyber City',
-      mood: 'Exciting',
-      characters: [{ name: 'Alex', role: 'Protagonist' }]
-    }
-  };
-};
+// ---- API functions ----
 
-export const submitEdit = async (sessionId: string, message: string) => {
-  return { session_id: sessionId, dirty_keys: [], reasoning: '' };
-};
+/** Create a new session for the voice conversation */
+export const startConversationSession = (): Promise<SessionResponse> =>
+  post('/api/conversation/start', {});
 
-export const getDevMode = async () => ({ dev_mode: true, dev_session_id: 'mock-dev-id', dev_steps: [] });
+/** Enqueue the full generation pipeline */
+export const startGeneration = (sessionId: string): Promise<SessionResponse> =>
+  post('/api/story/generate', { session_id: sessionId, conversation_transcript: null });
 
-export const videoUrl = (sessionId: string) => 'https://www.w3schools.com/html/mov_bbb.mp4';
+/** Poll pipeline status */
+export const getStatus = (sessionId: string): Promise<StatusResponse> =>
+  get(`/api/story/${sessionId}/status`);
 
-// ---- REAL openProgressSocket (uncomment to use) ----
-// export function openProgressSocket(
-//   sessionId: string,
-//   onEvent: (e: any) => void,
-//   onClose?: () => void
-// ): () => void {
-//   const ws = new WebSocket(`ws://localhost:8001/ws/${sessionId}`);
-//   ws.onmessage = (ev) => {
-//     try { onEvent(JSON.parse(ev.data)); } catch {}
-//   };
-//   ws.onclose = () => onClose?.();
-//   return () => ws.close();
-// }
+/** Get full pipeline state (title, characters, etc.) */
+export const getState = (sessionId: string): Promise<StateResponse> =>
+  get(`/api/story/${sessionId}/state`);
 
-// ---- MOCK openProgressSocket ----
-// Simulates all 7 pipeline steps with realistic timing.
-// Each step fires a 'started' event then a 'done' event.
-// After all steps, fires { step: 'pipeline', status: 'done' }.
-export function openProgressSocket(
-  sessionId: string,
-  onEvent: (e: any) => void,
-  onClose?: () => void
-): () => void {
-  const STEPS = [
-    { key: 'story_breakdown',  durationMs: 2200 },
-    { key: 'narration',        durationMs: 2800 },
-    { key: 'character_images', durationMs: 3200 },
-    { key: 'scene_prompts',    durationMs: 2000 },
-    { key: 'scene_images',     durationMs: 4000 },
-    { key: 'scene_videos',     durationMs: 5500 },
-    { key: 'compile',          durationMs: 2500 },
-  ];
+/** Get the compiled video URL and version */
+export const getVideo = (sessionId: string): Promise<VideoResponse> =>
+  get(`/api/story/${sessionId}/video`);
 
-  const timers: ReturnType<typeof setTimeout>[] = [];
-  let cursor = 0;
+/** Prepare for edit voice conversation */
+export const startEditConversation = (sessionId: string): Promise<SessionResponse> =>
+  post(`/api/edit-conversation/start?session_id=${sessionId}`, {});
 
-  function scheduleNext() {
-    if (cursor >= STEPS.length) {
-      const t = setTimeout(() => {
-        onEvent({ step: 'pipeline', status: 'done' });
-        onClose?.();
-      }, 400);
-      timers.push(t);
-      return;
-    }
+/** Enqueue the edit pipeline using the saved edit transcript */
+export const editFromTranscript = (sessionId: string): Promise<SessionResponse> =>
+  post(`/api/story/${sessionId}/edit-from-transcript`, { transcript: null });
 
-    const { key, durationMs } = STEPS[cursor];
-    cursor++;
+/** Retry only the failed/skipped steps from the last pipeline run */
+export const retryFailedScenes = (sessionId: string): Promise<SessionResponse> =>
+  post(`/api/story/${sessionId}/retry`, {});
 
-    // Fire 'started'
-    onEvent({ step: key, status: 'started' });
+/** Re-run only the compile step (no asset regeneration) */
+export const recompileVideo = (sessionId: string): Promise<SessionResponse> =>
+  post(`/api/story/${sessionId}/recompile`, {});
 
-    // Fire 'done' after duration, then move to next step
-    const t = setTimeout(() => {
-      onEvent({ step: key, status: 'done' });
-      scheduleNext();
-    }, durationMs);
-    timers.push(t);
+/**
+ * Get a thumbnail URL for the session's first scene image.
+ * Returns either a direct image URL (local disk) or { thumbnail_url } JSON (MinIO).
+ */
+export async function getThumbnailUrl(sessionId: string): Promise<string> {
+  const path = `/api/story/${sessionId}/thumbnail`;
+  const res = await fetch(`${BASE}${path}`);
+  if (!res.ok) throw new Error(`Thumbnail not available (${res.status})`);
+  const contentType = res.headers.get('content-type') ?? '';
+  if (contentType.startsWith('image/')) {
+    // Direct image stream from local disk — use the endpoint URL directly
+    return path;
   }
-
-  // Small initial delay to simulate backend spin-up
-  const initTimer = setTimeout(scheduleNext, 800);
-  timers.push(initTimer);
-
-  return () => timers.forEach(clearTimeout);
+  const data = await res.json() as { thumbnail_url?: string };
+  if (data.thumbnail_url) return data.thumbnail_url;
+  throw new Error('No thumbnail URL in response');
 }

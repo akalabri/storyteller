@@ -1,5 +1,6 @@
 // ============================================================
 // Audio Bridge — real PCM WebSocket for live conversation
+// Supports both /ws/conversation/{sid} and /ws/edit-conversation/{sid}
 // ============================================================
 
 export interface ConvSocket {
@@ -7,19 +8,35 @@ export interface ConvSocket {
   close(): void;
 }
 
+/**
+ * Open a bidirectional PCM audio WebSocket.
+ *
+ * @param sessionId  The session ID.
+ * @param onState    Called when the AI state changes.
+ * @param onTranscript Called when a transcript line arrives.
+ * @param onEnd      Called when the backend sends session_end.
+ * @param onError    Called on connection or protocol errors.
+ * @param wsPath     Optional WebSocket path override.
+ *                   Defaults to /ws/conversation/{sessionId}.
+ *                   Pass /ws/edit-conversation/{sessionId} for edit sessions.
+ */
 export async function openConversation(
   sessionId: string,
   onState: (s: 'listening' | 'speaking' | 'processing') => void,
   onTranscript: (speaker: 'user' | 'ai', text: string) => void,
   onEnd: () => void,
   onError: (msg: string) => void,
+  wsPath?: string,
 ): Promise<ConvSocket> {
-  // 1. Open WebSocket
+  const path = wsPath ?? `/ws/conversation/${sessionId}`;
   const wsBase = `ws://${window.location.host}`;
-  const ws = new WebSocket(`${wsBase}/ws/conversation/${sessionId}`);
+  const wsUrl = `${wsBase}${path}`;
+
+  console.log(`[AudioBridge] Connecting to ${wsUrl}`);
+  const ws = new WebSocket(wsUrl);
   ws.binaryType = 'arraybuffer';
 
-  // 2. Playback: 24kHz PCM Int16 → AudioContext
+  // ---- Playback: 24kHz PCM Int16 → AudioContext ----
   const playCtx = new AudioContext({ sampleRate: 24000 });
   let nextPlayTime = 0;
 
@@ -35,10 +52,14 @@ export async function openConversation(
     const when = Math.max(playCtx.currentTime, nextPlayTime);
     src.start(when);
     nextPlayTime = when + ab.duration;
+    console.log(`[AudioBridge] Playing ${int16.length} samples`);
   }
 
-  // 3. Capture: mic → 16kHz PCM Int16 → send binary
+  // ---- Capture: mic → 16kHz PCM Int16 → send binary ----
+  console.log('[AudioBridge] Requesting microphone access...');
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  console.log('[AudioBridge] Microphone access granted');
+
   const capCtx = new AudioContext({ sampleRate: 16000 });
   const source = capCtx.createMediaStreamSource(stream);
   const processor = capCtx.createScriptProcessor(4096, 1, 1);
@@ -57,52 +78,76 @@ export async function openConversation(
     ws.send(int16.buffer);
   };
 
-  // 4. Handle incoming messages
+  // ---- Cleanup ----
   let cleanedUp = false;
   function cleanup() {
     if (cleanedUp) return;
     cleanedUp = true;
+    console.log('[AudioBridge] Cleaning up audio resources');
     processor.disconnect();
     source.disconnect();
     stream.getTracks().forEach(t => t.stop());
     try { capCtx.close(); } catch {}
+    try { playCtx.close(); } catch {}
   }
 
+  // ---- Incoming messages ----
   ws.onmessage = (evt) => {
     if (evt.data instanceof ArrayBuffer) {
       playPCM(evt.data);
     } else {
       try {
         const msg = JSON.parse(evt.data as string);
-        if (msg.type === 'state') onState(msg.value);
-        else if (msg.type === 'transcript') onTranscript(msg.speaker, msg.text);
-        else if (msg.type === 'session_end') { cleanup(); onEnd(); }
-        else if (msg.type === 'error') onError(msg.message);
-      } catch {}
+        console.log('[AudioBridge] Received JSON:', msg);
+        if (msg.type === 'state') {
+          console.log(`[AudioBridge] State → ${msg.value}`);
+          onState(msg.value);
+        } else if (msg.type === 'transcript') {
+          console.log(`[AudioBridge] Transcript [${msg.speaker}]: ${msg.text}`);
+          onTranscript(msg.speaker, msg.text);
+        } else if (msg.type === 'session_end') {
+          console.log('[AudioBridge] session_end received');
+          cleanup();
+          onEnd();
+        } else if (msg.type === 'error') {
+          console.error('[AudioBridge] Error from backend:', msg.message);
+          onError(msg.message);
+        }
+      } catch (err) {
+        console.warn('[AudioBridge] Failed to parse message:', evt.data, err);
+      }
     }
   };
 
   ws.onerror = (e) => {
-    console.error('[ConvWS]', e);
+    console.error('[AudioBridge] WebSocket error:', e);
     onError('Connection error');
   };
 
-  ws.onclose = () => cleanup();
+  ws.onclose = (e) => {
+    console.log(`[AudioBridge] WebSocket closed: code=${e.code} reason=${e.reason}`);
+    cleanup();
+  };
 
-  // Wait for WS to open
+  // ---- Wait for connection ----
   await new Promise<void>((resolve, reject) => {
     if (ws.readyState === WebSocket.OPEN) return resolve();
-    ws.onopen = () => resolve();
-    setTimeout(() => reject(new Error('WS timeout')), 10000);
+    ws.onopen = () => {
+      console.log('[AudioBridge] WebSocket connected');
+      resolve();
+    };
+    setTimeout(() => reject(new Error('WebSocket connection timed out after 10s')), 10000);
   });
 
   return {
     sendEndSession() {
+      console.log('[AudioBridge] Sending end_session');
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'end_session' }));
       }
     },
     close() {
+      console.log('[AudioBridge] Closing connection');
       cleanup();
       if (ws.readyState < 2) ws.close();
     },
