@@ -1,5 +1,5 @@
 // ============================================================
-// AI Stories Lab — Main Entry Point
+// Vibe Story Lab — Main Entry Point
 // ============================================================
 
 import './style.css';
@@ -7,11 +7,14 @@ import { createLandingScreen } from './screens/landing.js';
 import {
   createConversationScreen,
   startConversation,
-  resetConversation,
 } from './screens/conversation.js';
 import { createGeneratingScreen, createStoryScreen } from './screens/story.js';
-import { createEditScreen } from './screens/edit.js';
+import {
+  createEditScreen,
+  startEditConversation,
+} from './screens/edit.js';
 import { addStory } from './utils/store.js';
+import { getVideo, getState, getThumbnailUrl, startEditConversation as apiStartEditConversation } from './utils/api.js';
 
 // ============================================================
 // Screen Manager
@@ -55,6 +58,7 @@ class ScreenManager {
     setTimeout(() => {
       target.classList.add('active');
       this.current = id;
+      console.log('[Nav] Showing screen:', id);
     }, 60);
   }
 
@@ -88,7 +92,6 @@ function ensureQueueWrapper(): HTMLElement {
   return wrapper;
 }
 
-// Selector targets the outer wrap (which holds done/out classes)
 function getWrapEl(sid: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(`.gen-card-wrap[data-sid="${sid}"]`);
 }
@@ -125,6 +128,7 @@ function addGenCard(sid: string) {
   const tmp = document.createElement('div');
   tmp.innerHTML = buildCardHTML(sid);
   wrapper.appendChild(tmp.firstElementChild as HTMLElement);
+  console.log('[GenCard] Added card for session:', sid);
 }
 
 function markGenCardDone(sid: string) {
@@ -132,8 +136,18 @@ function markGenCardDone(sid: string) {
   if (!wrap) return;
   wrap.classList.add('gen-card-done');
   const labelEl = wrap.querySelector<HTMLElement>('.gen-card-label-text');
-  if (labelEl) labelEl.textContent = 'Story ready!';
-  setTimeout(() => dismissGenCard(sid), 4000);
+  if (labelEl) labelEl.textContent = 'Story ready! Click to view';
+  console.log('[GenCard] Marked done:', sid);
+
+  // Clicking the done card navigates to the story screen
+  wrap.style.cursor = 'pointer';
+  wrap.addEventListener('click', () => {
+    console.log('[GenCard] Clicked — navigating to story:', sid);
+    sessionId = sid;
+    buildStoryScreen(sid);
+    manager.show('story');
+    dismissGenCard(sid);
+  }, { once: true });
 }
 
 function dismissGenCard(sid: string) {
@@ -155,61 +169,89 @@ function dismissGenCard(sid: string) {
 function buildConversationScreen() {
   const conv = createConversationScreen((sid) => {
     sessionId = sid;
+    localStorage.setItem('storyteller-session-id', sid);
+    console.log('[App] Conversation finished, session:', sid);
     startBackgroundGeneration(sid);
   });
   manager.replace('conversation', conv);
 }
 
-function startBackgroundGeneration(sid: string) {
+function startBackgroundGeneration(sid: string, skipGenerate = false) {
   addGenCard(sid);
 
-  const gen = createGeneratingScreen(sid, (completedSid) => {
+  const gen = createGeneratingScreen(sid, async (completedSid) => {
+    console.log('[App] Generation complete for session:', completedSid);
     markGenCardDone(completedSid);
 
-    addStory({
-      id: completedSid,
-      title: 'Your Masterpiece',
-      desc: 'A personalized AI-generated story created from your conversation.',
-      image: '/assets/thumnail_mockup.png',
-      videoUrl: 'https://www.w3schools.com/html/mov_bbb.mp4',
-      isUserGenerated: true
-    });
+    // Fetch real title, thumbnail and video URL to populate the store
+    try {
+      const [videoData, stateData, thumbnailUrl] = await Promise.all([
+        getVideo(completedSid),
+        getState(completedSid).catch(() => null),
+        getThumbnailUrl(completedSid).catch(() => '/assets/thumnail_mockup.png'),
+      ]);
+      const title = stateData?.breakdown?.title ?? 'Your Masterpiece';
+      addStory({
+        id: completedSid,
+        title,
+        desc: stateData?.breakdown?.premise ?? 'A personalized AI-generated story.',
+        image: thumbnailUrl,
+        videoUrl: videoData.video_url,
+        version: videoData.version,
+      });
+      console.log('[App] Story added to store:', completedSid, title);
+    } catch (err) {
+      console.warn('[App] Could not fetch video/state after generation:', err);
+      addStory({
+        id: completedSid,
+        title: 'Your Masterpiece',
+        desc: 'A personalized AI-generated story.',
+        image: '/assets/thumnail_mockup.png',
+        videoUrl: '',
+      });
+    }
 
+    // Navigate directly to the story/video page
     sessionId = completedSid;
-    buildStoryScreen(true);
-    // Story added to carousel; user can click it from there.
-    // manager.show('story');
-  });
+    buildStoryScreen(completedSid);
+    manager.show('story');
+  }, skipGenerate);
 
   manager.replace('generating', gen);
-  manager.show('landing');
+  manager.show('generating');
 }
 
-function buildStoryScreen(fromMockStore = false) {
+function buildStoryScreen(sid: string) {
   const story = createStoryScreen(
-    sessionId,
-    fromMockStore,
+    sid,
     () => { manager.show('landing'); },
-    (sid) => handleEditStory(sid)
+    (storySessionId) => handleEditStory(storySessionId)
   );
   manager.replace('story', story);
 }
 
-function handleEditStory(sid: string) {
+async function handleEditStory(sid: string) {
   sessionId = sid;
+  console.log('[App] Starting edit conversation for session:', sid);
+
+  try {
+    // Start the edit conversation session on the backend
+    await apiStartEditConversation(sid);
+    console.log('[App] Edit conversation session started');
+  } catch (err: any) {
+    console.error('[App] Failed to start edit conversation:', err);
+    alert(`Could not start edit conversation: ${err?.message ?? err}`);
+    return;
+  }
+
   const edit = createEditScreen(sid, (updatedSid) => {
     sessionId = updatedSid;
-    startBackgroundGeneration(updatedSid);
+    console.log('[App] Edit conversation done, starting background generation for:', updatedSid);
+    startBackgroundGeneration(updatedSid, true);
   });
   manager.replace('edit', edit);
   manager.show('edit');
-}
-
-function handleCreateAnother() {
-  sessionId = '';
-  resetConversation();
-  buildConversationScreen();
-  manager.show('landing');
+  void startEditConversation();
 }
 
 // ============================================================
@@ -227,57 +269,60 @@ async function buildApp() {
     () => {
       buildConversationScreen();
       manager.show('conversation');
-      startConversation();
+      void startConversation();
     },
     (storyId) => {
       sessionId = storyId;
-      buildStoryScreen(true);
+      buildStoryScreen(storyId);
       manager.show('story');
     }
   );
   manager.register('landing', landing);
 
-  // ---- Screen 2: Conversation (placeholder) ----
+  // ---- Placeholder screens (replaced when needed) ----
   const convPlaceholder = document.createElement('div');
   convPlaceholder.id = 'screen-conversation';
   convPlaceholder.className = 'screen';
   manager.register('conversation', convPlaceholder);
 
-  // ---- Screen 3: Generating (placeholder) ----
   const genPlaceholder = document.createElement('div');
   genPlaceholder.id = 'screen-generating';
   genPlaceholder.className = 'screen';
   manager.register('generating', genPlaceholder);
 
-  // ---- Screen 4: Story (placeholder) ----
   const storyPlaceholder = document.createElement('div');
   storyPlaceholder.id = 'screen-story';
   storyPlaceholder.className = 'screen';
   manager.register('story', storyPlaceholder);
 
-  // ---- Screen 5: Edit (placeholder) ----
   const editPlaceholder = document.createElement('div');
   editPlaceholder.id = 'screen-edit';
   editPlaceholder.className = 'screen';
   manager.register('edit', editPlaceholder);
+
+  // ---- Restore session from localStorage ----
+  const savedSession = localStorage.getItem('storyteller-session-id');
+  if (savedSession) {
+    sessionId = savedSession;
+    console.log('[App] Restored session from localStorage:', savedSession);
+  }
 
   // ---- Show initial screen ----
   const previewParam = new URLSearchParams(window.location.search).get('preview');
   if (previewParam === '2' || previewParam === 'conv') {
     buildConversationScreen();
     manager.show('conversation');
-    startConversation();
+    void startConversation();
   } else if (previewParam === '3') {
-    startBackgroundGeneration(sessionId || 'mock-id');
+    const sid = sessionId || 'preview-session';
+    startBackgroundGeneration(sid);
   } else if (previewParam === '4') {
-    buildStoryScreen();
-    manager.show('story');
-  } else if (previewParam === 'ring') {
-    // Preview: land on home with two fake generation cards (shows multi-generation layout)
-    manager.show('landing');
-    const t = Date.now();
-    startBackgroundGeneration('mock-ring-1-' + t);
-    setTimeout(() => startBackgroundGeneration('mock-ring-2-' + t), 1200);
+    if (sessionId) {
+      buildStoryScreen(sessionId);
+      manager.show('story');
+    } else {
+      manager.show('landing');
+    }
   } else {
     manager.show('landing');
   }
