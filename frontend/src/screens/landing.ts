@@ -57,12 +57,12 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
     <section class="landing-dark">
       <div class="landing-dark-content">
         <h1 class="landing-title">
-          Turn Your Voice<br/>Into a Story
+          Imagine It.<br/>We'll Animate It.
         </h1>
 
         <p class="landing-subtitle">
-          Have a conversation with AI. It listens, understands you,<br/>
-          then generates a personalized video story just for you.
+          Have a live voice conversation with AI — it draws out<br/>
+          your story, shapes it with you, then brings it to life.
         </p>
         
         <button class="btn-labs" id="start-btn" aria-label="Start voice conversation">
