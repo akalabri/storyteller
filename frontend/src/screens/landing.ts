@@ -118,8 +118,8 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
   function makeCard(story: typeof storiesStore[number]): HTMLElement {
     const card = document.createElement('div');
     card.className = 'carousel-card';
-    const versionBadge = story.version != null
-      ? `<span class="carousel-card-version">v${story.version}</span>`
+    const versionBadge = story.version != null && story.version > 1
+      ? `<span class="carousel-card-version">Edited</span>`
       : '';
     card.innerHTML = `
       <img src="${story.image}" alt="${story.title}" loading="lazy" />
