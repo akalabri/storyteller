@@ -283,6 +283,20 @@ export function videoUrl(sessionId) {
 }
 
 // ---------------------------------------------------------------------------
+// Stories list
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch all sessions that have a completed final video.
+ * Returns an array of { id, title, desc, version, thumbnail_url, video_url }.
+ *
+ * @returns {Promise<Array>}
+ */
+export function listStories() {
+  return get('/api/stories');
+}
+
+// ---------------------------------------------------------------------------
 // Page tracking
 // ---------------------------------------------------------------------------
 

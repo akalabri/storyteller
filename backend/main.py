@@ -974,6 +974,61 @@ async def get_current(session_id: str) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/stories  — list all sessions that have a final video
+# ---------------------------------------------------------------------------
+
+@app.get("/api/stories")
+async def list_stories() -> JSONResponse:
+    """
+    Return metadata for every session that has a completed final video,
+    ordered newest first.  Used by the landing-page carousel so it can
+    populate itself from real data instead of relying on localStorage.
+
+    Each item:
+      { id, title, desc, version, thumbnail_url, video_url }
+    """
+    from backend.config import SESSIONS_DIR
+    from backend.pipeline.state import StoryState as _SS
+
+    results = []
+
+    for state_path in sorted(SESSIONS_DIR.glob("*/story_state.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        session_id = state_path.parent.name
+        try:
+            state = _SS.load(state_path)
+        except Exception:
+            continue
+
+        if not state.final_video_path:
+            continue
+
+        video_version = len(state.edit_history) + 1
+
+        # Derive title + desc the same way get_state() does
+        title = "Your Masterpiece"
+        desc = ""
+        if state.breakdown:
+            chars = state.breakdown.characters_prompts
+            if chars:
+                names = [c.name for c in chars[:2]]
+                title = " & ".join(names) if len(names) > 1 else names[0]
+            if state.breakdown.story:
+                first = state.breakdown.story[0]
+                desc = first[:160].rstrip() + ("…" if len(first) > 160 else "")
+
+        results.append({
+            "id": session_id,
+            "title": title,
+            "desc": desc,
+            "version": video_version,
+            "thumbnail_url": f"/api/story/{session_id}/thumbnail",
+            "video_url": f"/api/story/{session_id}/video",
+        })
+
+    return JSONResponse(results)
+
+
+# ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
 
