@@ -1002,6 +1002,9 @@ async def list_stories() -> JSONResponse:
         if not state.final_video_path:
             continue
 
+        if not Path(state.final_video_path).exists():
+            continue
+
         video_version = len(state.edit_history) + 1
 
         # Derive title + desc the same way get_state() does

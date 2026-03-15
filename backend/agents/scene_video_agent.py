@@ -108,10 +108,13 @@ def _is_rate_limit(exc: Exception) -> bool:
 
 
 def _is_transient(exc: Exception) -> bool:
-    msg = str(exc)
-    return any(code in msg for code in ("500", "502", "503", "504")) or isinstance(
-        exc, (ConnectionError, TimeoutError, OSError)
-    )
+    msg = str(exc).lower()
+    if any(code in msg for code in ("500", "502", "503", "504")):
+        return True
+    if any(phrase in msg for phrase in ("server disconnected", "connection closed",
+                                        "remoteprotocolerror", "incomplete response")):
+        return True
+    return isinstance(exc, (ConnectionError, TimeoutError, OSError))
 
 
 def _is_veo_internal_error(exc: Exception) -> bool:
@@ -148,11 +151,24 @@ def _download_gcs_sync(gs_uri: str, local_path: str) -> None:
 
 def _wait_for_veo_operation(client: genai.Client, op, poll_s: int, timeout_s: int):
     start = time.time()
+    poll_retries = 0
+    max_poll_retries = 3
     while not op.done:
         if time.time() - start > timeout_s:
             raise TimeoutError(f"Veo operation timed out after {timeout_s}s")
         time.sleep(poll_s)
-        op = client.operations.get(op)
+        try:
+            op = client.operations.get(op)
+            poll_retries = 0
+        except Exception as exc:
+            if _is_transient(exc) and poll_retries < max_poll_retries:
+                poll_retries += 1
+                logger.warning(
+                    "[Veo] Transient poll error (attempt %d/%d): %s — retrying in %ds",
+                    poll_retries, max_poll_retries, exc, poll_s,
+                )
+                continue
+            raise
     return op
 
 

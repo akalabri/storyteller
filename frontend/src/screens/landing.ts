@@ -81,10 +81,15 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
         <div class="landing-orb-bubble orb-7"><img src="/assets/landing_page_thumnails/Whisk_edde7bec2004a04997349daf2e7aa62ddr.jpeg" alt="" /></div>
         <div class="landing-orb-bubble orb-8"><img src="/assets/landing_page_thumnails/Whisk_f86e3a2688f8d6098814e95e67ca4b72dr.jpeg" alt="" /></div>
       </div>
+      <button class="scroll-hint" id="scroll-hint-btn" aria-label="Scroll to recent stories">
+        <svg class="scroll-hint-arrow" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <polyline points="6 9 12 15 18 9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </section>
 
     <!-- CAROUSEL SECTION -->
-    <section class="landing-carousel-section">
+    <section class="landing-carousel-section" id="carousel-section">
       <h2 class="carousel-title">Recent Masterpieces</h2>
       <div class="carousel-wrapper">
         <button class="carousel-nav-btn carousel-nav-prev" id="carousel-prev" aria-label="Previous">
@@ -101,11 +106,43 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
 
   `;
 
-  // Render carousel from real store only
+  // ---- Infinite-loop carousel state ----
+  const CARD_WIDTH = 220;
+  const CARD_GAP = 24;
+  const AUTO_SCROLL_SPEED = 0.5;          // px per frame
+  let animId: number | null = null;
+  let scrollPos = 0;
+  let totalOriginalWidth = 0;
+  let isPaused = false;
+
+  function makeCard(story: typeof storiesStore[number]): HTMLElement {
+    const card = document.createElement('div');
+    card.className = 'carousel-card';
+    const versionBadge = story.version != null
+      ? `<span class="carousel-card-version">v${story.version}</span>`
+      : '';
+    card.innerHTML = `
+      <img src="${story.image}" alt="${story.title}" loading="lazy" />
+      <div class="carousel-card-overlay">
+        <div class="carousel-card-meta">
+          ${versionBadge}
+          <span class="carousel-card-title">${story.title}</span>
+        </div>
+      </div>
+    `;
+    card.addEventListener('click', () => {
+      console.log('[Landing] Story card clicked:', story.id);
+      onStorySelect(story.id);
+    });
+    return card;
+  }
+
   function renderCarousel() {
     const track = screen.querySelector<HTMLElement>('#carousel-track');
     if (!track) return;
     track.innerHTML = '';
+
+    if (animId !== null) { cancelAnimationFrame(animId); animId = null; }
 
     if (storiesStore.length === 0) {
       const empty = document.createElement('div');
@@ -117,52 +154,71 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
       return;
     }
 
-    storiesStore.forEach(story => {
-      const card = document.createElement('div');
-      card.className = 'carousel-card';
-      const versionBadge = story.version != null
-        ? `<span class="carousel-card-version">v${story.version}</span>`
-        : '';
-      card.innerHTML = `
-        <img src="${story.image}" alt="${story.title}" loading="lazy" />
-        <div class="carousel-card-overlay">
-          <div class="carousel-card-meta">
-            ${versionBadge}
-            <span class="carousel-card-title">${story.title}</span>
-          </div>
-        </div>
-      `;
-      card.addEventListener('click', () => {
-        console.log('[Landing] Story card clicked:', story.id);
-        onStorySelect(story.id);
-      });
-      track.appendChild(card);
-    });
+    totalOriginalWidth = storiesStore.length * (CARD_WIDTH + CARD_GAP);
+
+    // Build enough clones to fill at least 3× the viewport so the
+    // loop is seamless no matter how wide the screen is.
+    const wrapperWidth = track.parentElement?.clientWidth ?? 1400;
+    const clonesNeeded = Math.max(2, Math.ceil((wrapperWidth * 3) / totalOriginalWidth));
+
+    for (let c = 0; c < clonesNeeded; c++) {
+      storiesStore.forEach(story => track.appendChild(makeCard(story)));
+    }
+
+    scrollPos = 0;
+    track.style.transform = `translateX(0px)`;
+    startAutoScroll(track);
+  }
+
+  function startAutoScroll(track: HTMLElement) {
+    function tick() {
+      if (!isPaused) {
+        scrollPos -= AUTO_SCROLL_SPEED;
+        if (Math.abs(scrollPos) >= totalOriginalWidth) {
+          scrollPos += totalOriginalWidth;
+        }
+        track.style.transform = `translateX(${scrollPos}px)`;
+      }
+      animId = requestAnimationFrame(tick);
+    }
+    animId = requestAnimationFrame(tick);
   }
 
   renderCarousel();
   subscribeToStories(renderCarousel);
-
-  // Populate carousel from the backend (covers cleared localStorage / new devices)
   loadStoriesFromBackend();
 
-  // Carousel nav buttons
+  // Pause on hover / touch
+  const trackEl = screen.querySelector<HTMLElement>('#carousel-track');
+  trackEl?.addEventListener('mouseenter', () => { isPaused = true; });
+  trackEl?.addEventListener('mouseleave', () => { isPaused = false; });
+  trackEl?.addEventListener('touchstart', () => { isPaused = true; }, { passive: true });
+  trackEl?.addEventListener('touchend', () => { isPaused = false; });
+
+  // Nav buttons: jump one card width
   const prevBtn = screen.querySelector<HTMLButtonElement>('#carousel-prev');
   const nextBtn = screen.querySelector<HTMLButtonElement>('#carousel-next');
-  const track = screen.querySelector<HTMLElement>('#carousel-track');
-  const scrollAmount = 280;
+  const jumpAmount = CARD_WIDTH + CARD_GAP;
 
   prevBtn?.addEventListener('click', () => {
-    track?.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
+    scrollPos += jumpAmount;
+    if (scrollPos > 0) scrollPos -= totalOriginalWidth;
   });
   nextBtn?.addEventListener('click', () => {
-    track?.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+    scrollPos -= jumpAmount;
+    if (Math.abs(scrollPos) >= totalOriginalWidth) scrollPos += totalOriginalWidth;
   });
 
   const startBtn = screen.querySelector<HTMLButtonElement>('#start-btn');
   startBtn?.addEventListener('click', () => {
     console.log('[Landing] Start Conversation clicked');
     setTimeout(onStart, 180);
+  });
+
+  const scrollHintBtn = screen.querySelector<HTMLButtonElement>('#scroll-hint-btn');
+  scrollHintBtn?.addEventListener('click', () => {
+    const carouselSection = screen.querySelector<HTMLElement>('#carousel-section');
+    carouselSection?.scrollIntoView({ behavior: 'smooth' });
   });
 
   attachMotion(screen);

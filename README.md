@@ -36,6 +36,12 @@
 
 *Stories created by real users, browsable from the landing page carousel.*
 
+<br/>
+
+<img src="assets/processing_page.png" alt="Crafting Your Story — Real-time Pipeline Progress" width="100%"/>
+
+*Real-time progress as the pipeline writes your story, designs your world, brings scenes to life, and applies final touches.*
+
 </div>
 
 ---
