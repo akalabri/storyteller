@@ -13,7 +13,7 @@ import {
   createEditScreen,
   startEditConversation,
 } from './screens/edit.js';
-import { addStory } from './utils/store.js';
+import { addStory, getStoryById } from './utils/store.js';
 import { getVideo, getState, getStatus, getThumbnailUrl, startEditConversation as apiStartEditConversation } from './utils/api.js';
 
 // ============================================================
@@ -265,6 +265,41 @@ function onGenerationComplete(completedSid: string) {
   })();
 }
 
+function onGenerationPartialFailure(failedSid: string) {
+  console.log('[App] Generation partial failure for session:', failedSid);
+  removeActiveGen(failedSid);
+  dismissGenCard(failedSid);
+
+  (async () => {
+    try {
+      const [stateData, thumbnailUrl] = await Promise.all([
+        getState(failedSid).catch(() => null),
+        getThumbnailUrl(failedSid).catch(() => '/assets/thumnail_mockup.png'),
+      ]);
+      const title = stateData?.breakdown?.title ?? 'Your Masterpiece';
+      addStory({
+        id: failedSid,
+        title,
+        desc: stateData?.breakdown?.premise ?? 'A personalized AI-generated story.',
+        image: thumbnailUrl,
+        videoUrl: '',
+        status: 'partial_failure',
+      });
+      console.log('[App] Partial-failure story added to store:', failedSid, title);
+    } catch (err) {
+      console.warn('[App] Could not fetch state after partial failure:', err);
+      addStory({
+        id: failedSid,
+        title: 'Your Masterpiece',
+        desc: 'A personalized AI-generated story.',
+        image: '/assets/thumnail_mockup.png',
+        videoUrl: '',
+        status: 'partial_failure',
+      });
+    }
+  })();
+}
+
 function goHome() {
   manager.show('landing');
 }
@@ -273,7 +308,7 @@ function startBackgroundGeneration(sid: string, skipGenerate = false, navigate =
   addActiveGen(sid);
   addGenCard(sid);
 
-  const gen = createGeneratingScreen(sid, onGenerationComplete, skipGenerate, goHome);
+  const gen = createGeneratingScreen(sid, onGenerationComplete, skipGenerate, goHome, onGenerationPartialFailure);
   genScreens.set(sid, gen);
 
   if (navigate) {
@@ -291,7 +326,11 @@ function startBackgroundGenerationPending(editPromise: Promise<string>) {
     removeActiveGen(placeholderSid);
     genScreens.delete(placeholderSid);
     onGenerationComplete(completedSid);
-  }, true, goHome);
+  }, true, goHome, (failedSid) => {
+    removeActiveGen(placeholderSid);
+    genScreens.delete(placeholderSid);
+    onGenerationPartialFailure(failedSid);
+  });
 
   genScreens.set(placeholderSid, gen);
   manager.replace('generating', gen);
@@ -315,6 +354,12 @@ function startBackgroundGenerationPending(editPromise: Promise<string>) {
 }
 
 function buildStoryScreen(sid: string) {
+  const existing = getStoryById(sid);
+  if (existing?.status === 'partial_failure') {
+    console.log('[App] Story has partial_failure — showing processing screen with retry:', sid);
+    startBackgroundGeneration(sid, true, true);
+    return;
+  }
   const story = createStoryScreen(
     sid,
     () => { manager.show('landing'); },
@@ -359,13 +404,17 @@ async function restoreActiveGens() {
       const status = await getStatus(sid);
       if (status.status === 'running' || status.status === 'editing') {
         addGenCard(sid);
-        const gen = createGeneratingScreen(sid, onGenerationComplete, true, goHome);
+        const gen = createGeneratingScreen(sid, onGenerationComplete, true, goHome, onGenerationPartialFailure);
         genScreens.set(sid, gen);
         console.log('[App] Restored running generation:', sid);
       } else if (status.status === 'done') {
         addGenCard(sid);
         markGenCardDone(sid);
         console.log('[App] Restored done generation:', sid);
+      } else if (status.status === 'partial_failure') {
+        removeActiveGen(sid);
+        onGenerationPartialFailure(sid);
+        console.log('[App] Restored partial_failure generation:', sid);
       } else {
         removeActiveGen(sid);
       }
@@ -395,8 +444,13 @@ async function buildApp() {
     },
     (storyId) => {
       sessionId = storyId;
-      buildStoryScreen(storyId);
-      manager.show('story');
+      const existing = getStoryById(storyId);
+      if (existing?.status === 'partial_failure') {
+        buildStoryScreen(storyId);
+      } else {
+        buildStoryScreen(storyId);
+        manager.show('story');
+      }
     }
   );
   manager.register('landing', landing);

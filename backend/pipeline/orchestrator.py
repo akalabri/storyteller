@@ -50,7 +50,7 @@ from backend.agents.scene_image_agent import (
 from backend.agents.scene_video_agent import VideoGenerationError, generate_scene_video
 from backend.agents.scene_prompt_agent import generate_scene_prompts
 from backend.agents.story_agent import generate_story_breakdown
-from backend.config import DEV_MODE, DEV_SESSION_ID, DEV_STEPS, SEQUENTIAL_GENERATION, session_dir
+from backend.config import DEV_MODE, DEV_SESSION_ID, DEV_STEPS, FAL_CONCURRENCY, SEQUENTIAL_GENERATION, session_dir
 from backend.pipeline.state import (
     PipelineStatus,
     StepStatus,
@@ -62,6 +62,17 @@ from backend.utils.file_io import safe_filename
 from backend.utils.minio_client import upload_session_artifact, upload_session_directory
 
 logger = logging.getLogger(__name__)
+
+
+class PartialVideoFailure(Exception):
+    """Raised when some (but not all) sub-scene videos failed to generate."""
+
+    def __init__(self, failed_keys: list[str]) -> None:
+        self.failed_keys = failed_keys
+        super().__init__(
+            f"Video generation failed for {len(failed_keys)} sub-scene(s): "
+            + ", ".join(failed_keys)
+        )
 
 
 def _db(func) -> None:
@@ -649,6 +660,9 @@ class StoryOrchestrator:
         videos_dir = self._videos_dir()
         char_paths = self._character_image_paths()
 
+        # Limit concurrent FAL requests to avoid hitting FAL's per-minute quota.
+        fal_sem = asyncio.Semaphore(1 if SEQUENTIAL_GENERATION else FAL_CONCURRENCY)
+
         failed_keys: list[str] = []
 
         async def _gen_one(scene_idx: int, sub_idx: int, video_prompt: str) -> None:
@@ -682,6 +696,7 @@ class StoryOrchestrator:
                 key, path = await generate_scene_video(
                     scene_idx, sub_idx, video_prompt,
                     scene_img_path, char_paths, videos_dir,
+                    fal_sem=fal_sem,
                 )
                 self.state.scene_video_paths[key] = path
                 self._emit(ProgressEvent(step, "done", data={"path": path}))
@@ -715,14 +730,9 @@ class StoryOrchestrator:
             ])
 
         if failed_keys:
-            msg = (
-                f"Scene video generation failed for {len(failed_keys)} sub-scene(s): "
-                + ", ".join(failed_keys)
-                + ". Continuing to compile with successfully generated videos."
-            )
-            logger.warning(msg)
-            self.state.add_error(msg)
+            self.state.failed_video_keys = list(failed_keys)
             self._save()
+            raise PartialVideoFailure(failed_keys)
 
     # -----------------------------------------------------------------------
     # Compile
@@ -846,6 +856,12 @@ class StoryOrchestrator:
 
             self.state.status = PipelineStatus.DONE
 
+        except PartialVideoFailure as exc:
+            logger.warning("Pipeline paused — partial video failure: %s", exc)
+            self.state.status = PipelineStatus.PARTIAL_FAILURE
+            self.state.add_error(str(exc))
+            _db(lambda db: db_crud.record_error(db, self.session_id, str(exc), step="scene_videos"))
+
         except Exception as exc:
             logger.exception("Pipeline failed: %s", exc)
             self.state.status = PipelineStatus.ERROR
@@ -937,6 +953,12 @@ class StoryOrchestrator:
                 await self._run_compile()
 
             self.state.status = PipelineStatus.DONE
+
+        except PartialVideoFailure as exc:
+            logger.warning("Selective pipeline paused — partial video failure: %s", exc)
+            self.state.status = PipelineStatus.PARTIAL_FAILURE
+            self.state.add_error(str(exc))
+            _db(lambda db: db_crud.record_error(db, self.session_id, str(exc), step="scene_videos"))
 
         except Exception as exc:
             logger.exception("Selective pipeline failed: %s", exc)

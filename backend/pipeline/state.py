@@ -99,6 +99,7 @@ class PipelineStatus(str, Enum):
     DONE = "done"
     ERROR = "error"
     EDITING = "editing"
+    PARTIAL_FAILURE = "partial_failure"
 
 
 class StepStatus(str, Enum):
@@ -147,6 +148,9 @@ class StoryState(BaseModel):
     scene_video_paths: dict[str, str] = Field(default_factory=dict)
 
     final_video_path: str | None = None
+
+    # Sub-scene keys whose video generation failed (populated on partial_failure)
+    failed_video_keys: list[str] = Field(default_factory=list)
 
     # --- Pipeline bookkeeping ---
     status: PipelineStatus = PipelineStatus.IDLE

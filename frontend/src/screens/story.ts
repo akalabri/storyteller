@@ -92,6 +92,7 @@ export function createGeneratingScreen(
   onComplete: (sessionId: string) => void,
   skipGenerate = false,
   onHome?: () => void,
+  onPartialFailure?: (sessionId: string) => void,
 ): HTMLElement {
   const screen = document.createElement('div');
   screen.id = 'screen-generating';
@@ -242,6 +243,48 @@ export function createGeneratingScreen(
     errorEl.appendChild(retryBtn);
   }
 
+  function handlePartialFailure(failedKeys: string[]) {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+    const count = failedKeys.length;
+    console.warn('[Generating] Partial video failure:', count, 'scene(s) failed');
+    if (progressLabel) progressLabel.textContent = 'Some scenes need a retry';
+
+    if (!errorEl) return;
+    errorEl.style.display = 'block';
+    errorEl.innerHTML = '';
+
+    const msgP = document.createElement('p');
+    msgP.style.cssText = 'margin:0 0 0.75rem;';
+    msgP.textContent = `${count} scene video(s) couldn't be generated due to API rate limits. You can retry now.`;
+    errorEl.appendChild(msgP);
+
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'btn-primary';
+    retryBtn.textContent = 'Retry';
+    retryBtn.style.cssText = 'margin-top:0.5rem;';
+    retryBtn.addEventListener('click', async () => {
+      retryBtn.disabled = true;
+      retryBtn.textContent = 'Retrying…';
+      errorEl.style.display = 'none';
+      completed = false;
+      try {
+        setProgress(2, 'Retrying failed scenes…');
+        await retryFailedScenes(resolvedSessionId);
+        startPolling();
+      } catch (err: any) {
+        handleError([err?.message ?? String(err)]);
+      }
+    });
+    errorEl.appendChild(retryBtn);
+
+    if (onPartialFailure) {
+      onPartialFailure(resolvedSessionId);
+    }
+  }
+
   function startPolling() {
     if (pollInterval || !resolvedSessionId) return;
     console.log('[Generating] Starting status poll for session:', resolvedSessionId);
@@ -263,6 +306,10 @@ export function createGeneratingScreen(
           clearInterval(pollInterval!);
           pollInterval = null;
           handlePipelineDone();
+        } else if (status.status === 'partial_failure') {
+          clearInterval(pollInterval!);
+          pollInterval = null;
+          handlePartialFailure(status.video_failed_keys ?? []);
         } else if (status.status === 'error') {
           clearInterval(pollInterval!);
           pollInterval = null;

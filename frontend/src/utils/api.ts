@@ -63,11 +63,12 @@ export interface StepStatus {
 
 export interface StatusResponse {
   session_id: string;
-  status: 'idle' | 'running' | 'done' | 'error' | 'editing';
+  status: 'idle' | 'running' | 'done' | 'error' | 'editing' | 'partial_failure';
   video_version: number;
   has_video: boolean;
   steps: StepStatus[];
   errors: string[];
+  video_failed_keys?: string[];
 }
 
 export interface VideoResponse {
