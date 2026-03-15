@@ -23,6 +23,5 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "uvicorn[standard]>=0.34.0",
     "minio>=7.2.0",
-    "sqlalchemy>=2.0.0",
-    "psycopg2-binary>=2.9.0",
+    "firebase-admin>=7.2.0",
 ]

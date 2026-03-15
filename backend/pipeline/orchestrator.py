@@ -56,7 +56,7 @@ from backend.pipeline.state import (
     StepStatus,
     StoryState,
 )
-from backend.db.database import SessionLocal
+from backend.db.database import get_db
 from backend.db import crud as db_crud
 from backend.utils.file_io import safe_filename
 from backend.utils.minio_client import upload_session_artifact, upload_session_directory
@@ -78,11 +78,8 @@ class PartialVideoFailure(Exception):
 def _db(func) -> None:
     """Best-effort DB call — never crashes the pipeline."""
     try:
-        db = SessionLocal()
-        try:
-            func(db)
-        finally:
-            db.close()
+        db = get_db()
+        func(db)
     except Exception as exc:
         logger.warning("DB persist failed: %s", exc)
 
@@ -154,12 +151,12 @@ class StoryOrchestrator:
             StepStatus(event.status) if event.status in StepStatus._value2member_map_ else StepStatus.RUNNING,
             event.message,
         )
-        # Record step in Postgres
+        # Record step in Firestore
         _db(lambda db: db_crud.record_step(db, self.session_id, event.step, event.status, event.message))
 
     def _save(self) -> None:
         self.state.save(self.state_path)
-        # Update session status in Postgres
+        # Update session status in Firestore
         _db(lambda db: db_crud.update_session_status(db, self.session_id, self.state.status.value))
 
     async def _upload_to_minio(self, local_path: str, relative_path: str) -> None:
@@ -434,7 +431,7 @@ class StoryOrchestrator:
                 "story_breakdown", "done",
                 message=f"{len(breakdown.story)} scenes, {len(breakdown.characters_prompts)} characters",
             ))
-            # Persist breakdown to Postgres
+            # Persist breakdown to Firestore
             _db(lambda db: db_crud.save_story_breakdown(db, self.session_id, breakdown))
         except Exception as exc:
             self.state.add_error(f"story_breakdown: {exc}")
@@ -533,7 +530,7 @@ class StoryOrchestrator:
             plan = await generate_scene_prompts(self.state.breakdown)
             self.state.visual_plan = plan
             self._emit(ProgressEvent("visual_plan", "done"))
-            # Persist visual plan to Postgres
+            # Persist visual plan to Firestore
             _db(lambda db: db_crud.save_visual_plan(db, self.session_id, plan))
         except Exception as exc:
             self.state.add_error(f"visual_plan: {exc}")
@@ -786,7 +783,7 @@ class StoryOrchestrator:
         self.state.conversation_transcript = conversation_transcript
         self._save()
 
-        # Save conversation transcript to Postgres
+        # Save conversation transcript to Firestore
         _db(lambda db: db_crud.save_conversation(db, self.session_id, conversation_transcript))
 
         try:

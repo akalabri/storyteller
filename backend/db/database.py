@@ -1,5 +1,5 @@
 """
-Database engine and session factory.
+Firestore client for the storyteller database.
 
 Usage
 -----
@@ -8,34 +8,30 @@ Usage
     # On startup:
     init_db()
 
-    # In a request handler:
-    db = next(get_db())
-    try:
-        ...
-    finally:
-        db.close()
+    # Anywhere:
+    db = get_db()
+    db.collection("sessions").document("abc").set({...})
 """
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session as DBSession
+import firebase_admin
+from firebase_admin import credentials, firestore
+from google.cloud.firestore_v1 import Client as FirestoreClient
 
-from backend.config import DATABASE_URL
-from backend.db.models import Base
+from backend.config import FIREBASE_CREDENTIALS, FIRESTORE_DATABASE_ID
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+_app: firebase_admin.App | None = None
 
 
 def init_db() -> None:
-    """Create all tables (safe to call multiple times)."""
-    Base.metadata.create_all(bind=engine)
+    """Initialize the Firebase app (safe to call multiple times)."""
+    global _app
+    if _app is None:
+        cred = credentials.Certificate(FIREBASE_CREDENTIALS)
+        _app = firebase_admin.initialize_app(cred)
 
 
-def get_db():
-    """Yield a DB session, auto-close when done. Use as a FastAPI dependency or manually."""
-    db: DBSession = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
+def get_db() -> FirestoreClient:
+    """Return the Firestore client."""
+    if _app is None:
+        init_db()
+    return firestore.client(app=_app, database_id=FIRESTORE_DATABASE_ID)
