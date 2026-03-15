@@ -1,6 +1,6 @@
 // ============================================================
 import { attachMotion } from '../utils/motion.js';
-import { storiesStore, subscribeToStories } from '../utils/store.js';
+import { storiesStore, subscribeToStories, loadStoriesFromBackend } from '../utils/store.js';
 // Screen 1: Landing — labs.google style (pink + dark)
 // ============================================================
 
@@ -142,6 +142,9 @@ export function createLandingScreen(onStart: () => void, onStorySelect: (id: str
 
   renderCarousel();
   subscribeToStories(renderCarousel);
+
+  // Populate carousel from the backend (covers cleared localStorage / new devices)
+  loadStoriesFromBackend();
 
   // Carousel nav buttons
   const prevBtn = screen.querySelector<HTMLButtonElement>('#carousel-prev');

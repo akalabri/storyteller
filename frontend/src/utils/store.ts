@@ -59,3 +59,49 @@ export function addStory(story: Story) {
 export function getStoryById(id: string): Story | undefined {
   return storiesStore.find(s => s.id === id);
 }
+
+/**
+ * Fetch the full story list from the backend and merge it into the store.
+ * Stories already in the store (by id) are updated in-place; new ones are
+ * appended.  The store is then persisted to localStorage and listeners are
+ * notified.
+ */
+export async function loadStoriesFromBackend(): Promise<void> {
+  try {
+    const { listStories } = await import('../api/client.js');
+    const items: Array<{
+      id: string;
+      title: string;
+      desc: string;
+      version: number;
+      thumbnail_url: string;
+      video_url: string;
+    }> = await listStories();
+
+    let changed = false;
+    for (const item of items) {
+      const story: Story = {
+        id: item.id,
+        title: item.title,
+        desc: item.desc,
+        image: item.thumbnail_url,
+        videoUrl: item.video_url,
+        version: item.version,
+      };
+      const idx = storiesStore.findIndex(s => s.id === story.id);
+      if (idx !== -1) {
+        storiesStore[idx] = story;
+      } else {
+        storiesStore.push(story);
+      }
+      changed = true;
+    }
+
+    if (changed) {
+      saveToStorage(storiesStore);
+      listeners.forEach(l => l());
+    }
+  } catch (err) {
+    console.warn('[Store] Failed to load stories from backend:', err);
+  }
+}
