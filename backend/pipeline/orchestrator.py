@@ -622,12 +622,19 @@ class StoryOrchestrator:
                 finally:
                     self._save()
 
-        tasks = [
-            _gen_one(s.scene_index, sub.index, sub.image_prompt)
+        subscenes_img = [
+            (s.scene_index, sub.index, sub.image_prompt)
             for s in self.state.visual_plan.scenes
             for sub in s.subscenes
         ]
-        await asyncio.gather(*tasks)
+        if SEQUENTIAL_GENERATION:
+            for scene_idx, sub_idx, image_prompt in subscenes_img:
+                await _gen_one(scene_idx, sub_idx, image_prompt)
+        else:
+            await asyncio.gather(*[
+                _gen_one(scene_idx, sub_idx, image_prompt)
+                for scene_idx, sub_idx, image_prompt in subscenes_img
+            ])
 
         if failed_keys:
             msg = (

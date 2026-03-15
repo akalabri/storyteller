@@ -404,7 +404,15 @@ Docker Compose builds and starts all services automatically:
 3. **Allow microphone access** when prompted
 4. **Start talking** — describe your story idea to the AI
 5. When you're done, the pipeline generates your video automatically
-6. Watch it, then tap **"Edit"** to refine with your voice
+6. Watch it, then tap **"Edit Story"** to refine with your voice
+
+<div align="center">
+
+<img src="assets/video_page.jpeg" alt="Story Result — Video Player with Edit Story button" width="90%"/>
+
+*Your finished story: a cinematic video with narration, subtitles, and an "Edit Story" button to start the voice-driven edit loop.*
+
+</div>
 
 ---
 
