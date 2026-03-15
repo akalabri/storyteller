@@ -221,12 +221,10 @@ SUBTITLE_FONT_PATH: Path | None = None   # set to a .ttf path to override defaul
 BACKGROUND_MUSIC_PATH: Path = _root / "backend" / "assets" / "story_background.mp3"
 
 # ---------------------------------------------------------------------------
-# PostgreSQL
+# Firebase / Firestore
 # ---------------------------------------------------------------------------
-DATABASE_URL: str = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://storyteller:storyteller@localhost:5432/storyteller",
-)
+FIREBASE_CREDENTIALS: str = os.environ.get("FIREBASE_CREDENTIALS", "firebase-key.json")
+FIRESTORE_DATABASE_ID: str = os.environ.get("FIRESTORE_DATABASE_ID", "story")
 
 # ---------------------------------------------------------------------------
 # MinIO

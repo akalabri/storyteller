@@ -395,6 +395,33 @@ export function createStoryScreen(
           preload="metadata"
         ></video>
       </div>
+
+      <div class="share-btns">
+        <button class="share-btn share-copy-link" id="share-copy-link" title="Copy Link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </button>
+        <button class="share-btn share-qr" id="share-qr" title="QR Code">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="3" height="3"/><line x1="21" y1="14" x2="21" y2="17"/><line x1="14" y1="21" x2="17" y2="21"/><line x1="21" y1="21" x2="21" y2="21.01"/></svg>
+        </button>
+        <button class="share-btn share-download" id="share-download" title="Download Video">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
+      </div>
+
+      <!-- QR Code Popup -->
+      <div class="qr-overlay" id="qr-overlay">
+        <div class="qr-popup" style="position:relative;">
+          <button class="qr-popup-close" id="qr-close">&times;</button>
+          <p class="qr-popup-title">Scan to watch</p>
+          <img id="qr-img" alt="QR Code" style="border-radius:12px;" />
+          <div class="qr-popup-actions">
+            <button class="qr-popup-btn" id="qr-download">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Download
+            </button>
+          </div>
+        </div>
+      </div>
       <div class="video-details-section">
         <div class="video-version-badge" id="version-badge">
           ${SPARKLE_ICON}
@@ -462,6 +489,65 @@ export function createStoryScreen(
   })();
 
   screen.querySelector<HTMLButtonElement>('#back-btn')?.addEventListener('click', onBack);
+
+  // Share button — copy the video URL to clipboard
+  const copyBtn = screen.querySelector<HTMLButtonElement>('#share-copy-link');
+  copyBtn?.addEventListener('click', () => {
+    const url = `${window.location.origin}?preview=4&session=${sessionId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      if (!copyBtn) return;
+      const origSvg = copyBtn.innerHTML;
+      copyBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:#fff"><polyline points="20 6 9 17 4 12"/></svg>`;
+      copyBtn.classList.add('share-btn-copied');
+      setTimeout(() => {
+        copyBtn.innerHTML = origSvg;
+        copyBtn.classList.remove('share-btn-copied');
+      }, 1500);
+    }).catch(() => console.warn('Clipboard write failed'));
+  });
+
+  // QR Code popup
+  const qrOverlay = screen.querySelector<HTMLElement>('#qr-overlay');
+  const qrImg = screen.querySelector<HTMLImageElement>('#qr-img');
+  const shareUrl = `${window.location.origin}?preview=4&session=${sessionId}`;
+  const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(shareUrl)}`;
+
+  screen.querySelector<HTMLButtonElement>('#share-qr')?.addEventListener('click', () => {
+    if (qrImg) qrImg.src = qrSrc;
+    qrOverlay?.classList.add('active');
+  });
+
+  // Close QR popup
+  screen.querySelector<HTMLButtonElement>('#qr-close')?.addEventListener('click', () => {
+    qrOverlay?.classList.remove('active');
+  });
+  qrOverlay?.addEventListener('click', (e) => {
+    if (e.target === qrOverlay) qrOverlay.classList.remove('active');
+  });
+
+  // Download QR as PNG
+  screen.querySelector<HTMLButtonElement>('#qr-download')?.addEventListener('click', async () => {
+    try {
+      const res = await fetch(qrSrc);
+      const blob = await res.blob();
+      const link = document.createElement('a');
+      link.download = `story-qr-${sessionId}.png`;
+      link.href = URL.createObjectURL(blob);
+      link.click();
+    } catch (err) {
+      console.warn('[StoryScreen] QR download failed:', err);
+    }
+  });
+
+
+  screen.querySelector<HTMLButtonElement>('#share-download')?.addEventListener('click', () => {
+    if (videoEl?.src) {
+      const a = document.createElement('a');
+      a.href = videoEl.src;
+      a.download = `story-${sessionId}.mp4`;
+      a.click();
+    }
+  });
 
   attachMotion(screen);
   return screen;
