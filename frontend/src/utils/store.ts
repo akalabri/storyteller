@@ -78,29 +78,28 @@ export async function loadStoriesFromBackend(): Promise<void> {
       video_url: string;
     }> = await listStories();
 
-    let changed = false;
-    for (const item of items) {
-      const story: Story = {
-        id: item.id,
-        title: item.title,
-        desc: item.desc,
-        image: item.thumbnail_url,
-        videoUrl: item.video_url,
-        version: item.version,
-      };
-      const idx = storiesStore.findIndex(s => s.id === story.id);
-      if (idx !== -1) {
-        storiesStore[idx] = story;
-      } else {
-        storiesStore.push(story);
+    const freshStories: Story[] = items.map(item => ({
+      id: item.id,
+      title: item.title,
+      desc: item.desc,
+      image: item.thumbnail_url,
+      videoUrl: item.video_url,
+      version: item.version,
+    }));
+
+    // Preserve any local-only entries (e.g. in-progress stories not yet on
+    // the backend) by appending them after the backend list.
+    const backendIds = new Set(freshStories.map(s => s.id));
+    for (const existing of storiesStore) {
+      if (!backendIds.has(existing.id)) {
+        freshStories.push(existing);
       }
-      changed = true;
     }
 
-    if (changed) {
-      saveToStorage(storiesStore);
-      listeners.forEach(l => l());
-    }
+    storiesStore.length = 0;
+    freshStories.forEach(s => storiesStore.push(s));
+    saveToStorage(storiesStore);
+    listeners.forEach(l => l());
   } catch (err) {
     console.warn('[Store] Failed to load stories from backend:', err);
   }

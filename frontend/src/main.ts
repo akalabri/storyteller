@@ -13,7 +13,7 @@ import {
   createEditScreen,
   startEditConversation,
 } from './screens/edit.js';
-import { addStory, getStoryById } from './utils/store.js';
+import { addStory, getStoryById, loadStoriesFromBackend } from './utils/store.js';
 import { getVideo, getState, getStatus, getThumbnailUrl, startEditConversation as apiStartEditConversation } from './utils/api.js';
 
 // ============================================================
@@ -302,6 +302,7 @@ function onGenerationPartialFailure(failedSid: string) {
 
 function goHome() {
   manager.show('landing');
+  loadStoriesFromBackend();
 }
 
 function startBackgroundGeneration(sid: string, skipGenerate = false, navigate = true) {
