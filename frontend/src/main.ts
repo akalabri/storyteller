@@ -496,8 +496,11 @@ async function buildApp() {
     const sid = sessionId || 'preview-session';
     startBackgroundGeneration(sid);
   } else if (previewParam === '4') {
-    if (sessionId) {
-      buildStoryScreen(sessionId);
+    const qsSession = new URLSearchParams(window.location.search).get('session');
+    const sid = qsSession || sessionId;
+    if (sid) {
+      sessionId = sid;
+      buildStoryScreen(sid);
       manager.show('story');
     } else {
       manager.show('landing');
