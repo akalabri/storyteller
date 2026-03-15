@@ -54,7 +54,7 @@ from backend.agents.conversation_agent import run_live_conversation
 from backend.agents.edit_conversation_agent import run_edit_conversation
 from backend.agents.edit_agent import plan_edit
 from backend.config import DEV_MODE, DEV_SESSION_ID, DEV_STEPS, session_dir
-from backend.db.database import init_db, get_db
+from backend.db.database import init_db, SessionLocal
 from backend.db import crud as db_crud
 from backend.pipeline.orchestrator import ProgressEvent, StoryOrchestrator
 from backend.pipeline.state import PipelineStatus, StoryState
@@ -116,10 +116,11 @@ def _get_or_create_session(session_id: str) -> dict[str, Any]:
             "progress_queue": q,
             "task": None,
         }
-        # Persist session row in Firestore
+        # Persist session row in Postgres
         try:
-            db = get_db()
+            db = SessionLocal()
             db_crud.upsert_session(db, session_id, "idle")
+            db.close()
         except Exception as exc:
             logger.warning("DB upsert_session failed: %s", exc)
     return _sessions[session_id]
@@ -522,10 +523,11 @@ async def edit_story(session_id: str, request: EditRequest) -> EditResponse:
     if updated_state.edit_history:
         reasoning = updated_state.edit_history[-1].get("reasoning", "")
 
-    # Record edit in Firestore
+    # Record edit in Postgres
     try:
-        db = get_db()
+        db = SessionLocal()
         db_crud.record_edit(db, session_id, request.message, reasoning, sorted(dirty_keys))
+        db.close()
     except Exception as exc:
         logger.warning("DB record_edit failed: %s", exc)
 
@@ -804,10 +806,11 @@ async def edit_from_transcript(
     if updated_state.edit_history:
         reasoning = updated_state.edit_history[-1].get("reasoning", "")
 
-    # Record edit in Firestore
+    # Record edit in Postgres
     try:
-        db = get_db()
+        db = SessionLocal()
         db_crud.record_edit(db, clone_id, transcript[:500], reasoning, sorted(dirty_keys))
+        db.close()
     except Exception as exc:
         logger.warning("DB record_edit failed: %s", exc)
 
@@ -932,33 +935,42 @@ class TrackPageRequest(BaseModel):
 @app.post("/api/track")
 async def track_page(request: TrackPageRequest) -> JSONResponse:
     """Record that a user navigated to a page."""
-    db = get_db()
-    row = db_crud.track_page_view(db, request.session_id, request.page)
-    logger.info("Page view: %s → %s", request.session_id or "anonymous", request.page)
-    return JSONResponse({
-        "id": row["id"],
-        "session_id": row.get("session_id"),
-        "page": row["page"],
-    })
+    db = SessionLocal()
+    try:
+        row = db_crud.track_page_view(db, request.session_id, request.page)
+        logger.info("Page view: %s → %s", request.session_id or "anonymous", request.page)
+        return JSONResponse({
+            "id": row.id,
+            "session_id": row.session_id,
+            "page": row.page,
+        })
+    finally:
+        db.close()
 
 
 @app.get("/api/track")
 async def get_tracking(session_id: str | None = None) -> JSONResponse:
     """Get page view history (optionally filtered by session_id)."""
-    db = get_db()
-    rows = db_crud.get_page_views(db, session_id)
-    return JSONResponse([
-        {"id": r["id"], "session_id": r.get("session_id"), "page": r["page"], "created_at": str(r.get("created_at", ""))}
-        for r in rows
-    ])
+    db = SessionLocal()
+    try:
+        rows = db_crud.get_page_views(db, session_id)
+        return JSONResponse([
+            {"id": r.id, "session_id": r.session_id, "page": r.page, "created_at": str(r.created_at)}
+            for r in rows
+        ])
+    finally:
+        db.close()
 
 
 @app.get("/api/track/{session_id}/current")
 async def get_current(session_id: str) -> JSONResponse:
     """Get the current page for a session."""
-    db = get_db()
-    page = db_crud.get_current_page(db, session_id)
-    return JSONResponse({"session_id": session_id, "current_page": page})
+    db = SessionLocal()
+    try:
+        page = db_crud.get_current_page(db, session_id)
+        return JSONResponse({"session_id": session_id, "current_page": page})
+    finally:
+        db.close()
 
 
 # ---------------------------------------------------------------------------
