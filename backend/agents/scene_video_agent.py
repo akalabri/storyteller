@@ -36,6 +36,7 @@ import base64
 import io
 import json
 import logging
+import random
 import time
 import uuid
 from pathlib import Path
@@ -56,6 +57,7 @@ from backend.config import (
     FAL_MODEL_ID,
     FAL_POLL_INTERVAL_S,
     FAL_QUEUE_BASE,
+    FAL_RATE_LIMIT_DELAYS,
     FAL_RESOLUTION,
     FAL_SAFETY_TOLERANCE,
     FAL_TIMEOUT_S,
@@ -71,6 +73,7 @@ from backend.config import (
     VEO_POLL_INTERVAL_S,
     VEO_RESOLUTION,
     VEO_TIMEOUT_S,
+    RETRY_JITTER_MAX_S,
     VIDEO_RATE_LIMIT_DELAYS,
     VIDEO_TRANSIENT_DELAYS,
 )
@@ -114,6 +117,12 @@ def _is_transient(exc: Exception) -> bool:
 def _is_veo_internal_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return "code 13" in msg or '"code": 13' in msg
+
+
+def _jittered_sleep(base_delay: int) -> None:
+    """Sleep for *base_delay* plus random jitter to stagger concurrent retries."""
+    jitter = random.uniform(0, RETRY_JITTER_MAX_S)
+    time.sleep(base_delay + jitter)
 
 
 # ===========================================================================
@@ -184,10 +193,10 @@ def _submit_veo_with_retry(
                     delay = rate_limit_delays[rate_limit_attempt]
                     rate_limit_attempt += 1
                     logger.warning(
-                        "[Veo][%s] Rate limited — attempt %d/%d. Retrying in %ds.",
+                        "[Veo][%s] Rate limited — attempt %d/%d. Retrying in ~%ds.",
                         filename, rate_limit_attempt, len(rate_limit_delays), delay,
                     )
-                    time.sleep(delay)
+                    _jittered_sleep(delay)
                 else:
                     logger.error("[Veo][%s] Rate limit retries exhausted.", filename)
                     raise
@@ -196,10 +205,10 @@ def _submit_veo_with_retry(
                     delay = transient_delays[transient_attempt]
                     transient_attempt += 1
                     logger.warning(
-                        "[Veo][%s] Transient error (attempt %d/%d) — retrying in %ds. Error: %s",
+                        "[Veo][%s] Transient error (attempt %d/%d) — retrying in ~%ds. Error: %s",
                         filename, transient_attempt, len(transient_delays), delay, exc,
                     )
-                    time.sleep(delay)
+                    _jittered_sleep(delay)
                 else:
                     logger.error("[Veo][%s] Transient error retries exhausted.", filename)
                     raise
@@ -281,10 +290,10 @@ def _generate_veo_sync(
         if err_code == 13 and internal_attempt < VEO_INTERNAL_ERROR_RETRIES:
             delay = VEO_INTERNAL_ERROR_DELAYS[internal_attempt]
             logger.warning(
-                "[Veo][%s] Internal error (code 13) — attempt %d/%d. Retrying in %ds.",
+                "[Veo][%s] Internal error (code 13) — attempt %d/%d. Retrying in ~%ds.",
                 filename, internal_attempt + 1, VEO_INTERNAL_ERROR_RETRIES, delay,
             )
-            time.sleep(delay)
+            _jittered_sleep(delay)
             continue
 
         raise RuntimeError(f"Veo returned no response for '{filename}': {operation}")
@@ -347,7 +356,7 @@ def _fal_request_with_retry(
     """
     rate_limit_attempt = 0
     transient_attempt = 0
-    rate_limit_delays = list(VIDEO_RATE_LIMIT_DELAYS)
+    rate_limit_delays = list(FAL_RATE_LIMIT_DELAYS)
     transient_delays = list(VIDEO_TRANSIENT_DELAYS)
 
     while True:
@@ -361,10 +370,10 @@ def _fal_request_with_retry(
                     delay = rate_limit_delays[rate_limit_attempt]
                     rate_limit_attempt += 1
                     logger.warning(
-                        "[FAL][%s] Rate limited — attempt %d/%d. Retrying in %ds.",
+                        "[FAL][%s] Rate limited — attempt %d/%d. Retrying in ~%ds.",
                         filename, rate_limit_attempt, len(rate_limit_delays), delay,
                     )
-                    time.sleep(delay)
+                    _jittered_sleep(delay)
                 else:
                     logger.error("[FAL][%s] Rate limit retries exhausted.", filename)
                     raise
@@ -373,10 +382,10 @@ def _fal_request_with_retry(
                     delay = transient_delays[transient_attempt]
                     transient_attempt += 1
                     logger.warning(
-                        "[FAL][%s] Transient error (attempt %d/%d) — retrying in %ds. Error: %s",
+                        "[FAL][%s] Transient error (attempt %d/%d) — retrying in ~%ds. Error: %s",
                         filename, transient_attempt, len(transient_delays), delay, exc,
                     )
-                    time.sleep(delay)
+                    _jittered_sleep(delay)
                 else:
                     logger.error("[FAL][%s] Transient error retries exhausted.", filename)
                     raise
@@ -388,10 +397,10 @@ def _fal_request_with_retry(
                 delay = transient_delays[transient_attempt]
                 transient_attempt += 1
                 logger.warning(
-                    "[FAL][%s] Network error (attempt %d/%d) — retrying in %ds. Error: %s",
+                    "[FAL][%s] Network error (attempt %d/%d) — retrying in ~%ds. Error: %s",
                     filename, transient_attempt, len(transient_delays), delay, exc,
                 )
-                time.sleep(delay)
+                _jittered_sleep(delay)
             else:
                 logger.error("[FAL][%s] Network error retries exhausted.", filename)
                 raise
@@ -472,6 +481,18 @@ def _generate_fal_sync(
 
 
 # ===========================================================================
+# Helpers
+# ===========================================================================
+
+class _null_context:
+    """No-op async context manager used when no FAL semaphore is provided."""
+    async def __aenter__(self):
+        return self
+    async def __aexit__(self, *_):
+        pass
+
+
+# ===========================================================================
 # Public async function
 # ===========================================================================
 
@@ -482,12 +503,20 @@ async def generate_scene_video(
     subscene_image_path: str,
     character_image_paths: list[str],
     output_dir: Path,
+    fal_sem: asyncio.Semaphore | None = None,
 ) -> tuple[str, str]:
     """
     Generate a sub-scene video and save it to ``output_dir``.
 
     Tries Veo first; falls back to FAL on VeoSafetyBlockedError.
     Returns ``(subscene_key, saved_path)``.
+
+    Parameters
+    ----------
+    fal_sem:
+        Optional semaphore that gates concurrent FAL requests.  Pass one
+        shared semaphore from the orchestrator to cap the number of
+        simultaneous FAL submissions and avoid FAL rate limits.
 
     Raises
     ------
@@ -539,22 +568,25 @@ async def generate_scene_video(
         ) from exc
 
     # ---- Fallback: FAL (only reached on VeoSafetyBlockedError) ----
-    try:
-        logger.info("[scene_video] Generating via FAL fallback: %s", filename)
-        await loop.run_in_executor(
-            None,
-            _generate_fal_sync,
-            video_prompt,
-            subscene_image_path,
-            list(character_image_paths),
-            out_path,
-            filename,
-        )
-        logger.info("[scene_video] Saved (FAL): %s", filename)
-        return key, str(out_path)
+    # Acquire the shared semaphore before submitting to FAL so we never
+    # exceed FAL's per-minute concurrency quota.
+    async with (fal_sem if fal_sem is not None else _null_context()):
+        try:
+            logger.info("[scene_video] Generating via FAL fallback: %s", filename)
+            await loop.run_in_executor(
+                None,
+                _generate_fal_sync,
+                video_prompt,
+                subscene_image_path,
+                list(character_image_paths),
+                out_path,
+                filename,
+            )
+            logger.info("[scene_video] Saved (FAL): %s", filename)
+            return key, str(out_path)
 
-    except Exception as exc:
-        logger.error("[scene_video][%s] FAL fallback also failed: %s", filename, exc)
-        raise VideoGenerationError(
-            f"Both Veo (safety block) and FAL failed for '{filename}': {exc}"
-        ) from exc
+        except Exception as exc:
+            logger.error("[scene_video][%s] FAL fallback also failed: %s", filename, exc)
+            raise VideoGenerationError(
+                f"Both Veo (safety block) and FAL failed for '{filename}': {exc}"
+            ) from exc

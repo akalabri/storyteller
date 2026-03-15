@@ -308,6 +308,8 @@ async def get_status(session_id: str) -> JSONResponse:
         "steps": [s.model_dump() for s in state.steps],
         "errors": state.errors,
         "final_video_path": state.final_video_path,
+        "has_video": bool(state.final_video_path),
+        "video_failed_keys": state.failed_video_keys,
     })
 
 
@@ -599,8 +601,9 @@ async def retry_failed_scenes(session_id: str) -> GenerateResponse:
     if not dirty_keys:
         raise HTTPException(status_code=400, detail="No failed or skipped steps to retry.")
 
-    # Clear previous errors so the UI shows a clean state
+    # Clear previous errors and failed keys so the UI shows a clean state
     orch.state.errors = []
+    orch.state.failed_video_keys = []
 
     # Cancel any previous background task
     if session["task"] and not session["task"].done():

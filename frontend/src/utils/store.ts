@@ -11,6 +11,7 @@ export interface Story {
   image: string;
   videoUrl: string;
   version?: number;
+  status?: string;
 }
 
 function loadFromStorage(): Story[] {

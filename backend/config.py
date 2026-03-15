@@ -103,7 +103,7 @@ SCENE_RESOLUTION: str = "2K"
 # ---------------------------------------------------------------------------
 # Veo (primary video generator via Google)
 # ---------------------------------------------------------------------------
-VEO_MODEL: str = "veo-3.1-fast-generate-001"
+VEO_MODEL: str = "veo-3.1-generate-001"
 VEO_ASPECT_RATIO: str = "9:16"
 VEO_DURATION_SECONDS: int = 8
 VEO_RESOLUTION: str = "720p"
@@ -116,7 +116,7 @@ VEO_TIMEOUT_S: int = 1800
 # ---------------------------------------------------------------------------
 FAL_MODEL_ID: str = "fal-ai/veo3.1/reference-to-video"
 FAL_QUEUE_BASE: str = "https://queue.fal.run"
-FAL_RESOLUTION: str = "1080p"
+FAL_RESOLUTION: str = "720p"
 FAL_DURATION: str = "8s"
 FAL_ASPECT_RATIO: str = "9:16"
 FAL_GENERATE_AUDIO: bool = False
@@ -124,6 +124,8 @@ FAL_SAFETY_TOLERANCE: str = "6"
 FAL_POLL_INTERVAL_S: int = 15
 FAL_TIMEOUT_S: int = 1800
 FAL_MAX_IMAGE_BYTES: int = 7 * 1024 * 1024
+# Max concurrent FAL requests — keeps us below FAL's per-minute rate limit.
+FAL_CONCURRENCY: int = int(os.environ.get("FAL_CONCURRENCY", "2"))
 
 # ---------------------------------------------------------------------------
 # Concurrency control
@@ -188,11 +190,19 @@ IMAGE_RATE_LIMIT_DELAYS: list[int] = [30, 60, 120, 180, 300]
 # Transient-error back-off delays (seconds) — applied on 5xx / network errors.
 IMAGE_TRANSIENT_DELAYS: list[int] = [5, 15, 30]
 
-# Scene video generation retries (Veo + FAL)
+# Scene video generation retries (Veo primary path)
 # Rate-limit back-off delays (seconds) — applied on HTTP 429 responses.
 VIDEO_RATE_LIMIT_DELAYS: list[int] = [30, 60, 120, 180]
 # Transient-error back-off delays (seconds) — applied on 5xx / network / timeout errors.
 VIDEO_TRANSIENT_DELAYS: list[int] = [10, 30, 60]
+
+# FAL rate-limit back-off delays (seconds) — FAL enforces stricter per-minute
+# quotas than Veo, so we use a longer sequence with more retries.
+FAL_RATE_LIMIT_DELAYS: list[int] = [30, 60, 120, 180, 300, 600]
+
+# Random jitter (seconds) added to each retry sleep so concurrent tasks
+# don't all wake up and hammer the API at the same instant.
+RETRY_JITTER_MAX_S: int = int(os.environ.get("RETRY_JITTER_MAX_S", "15"))
 
 # ---------------------------------------------------------------------------
 # Video compilation
