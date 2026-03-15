@@ -1,17 +1,17 @@
 """
-Simple CRUD helpers for the storyteller database.
+Firestore CRUD helpers for the storyteller database.
 
-Every function takes an explicit db session — no global state.
+Every function takes an explicit Firestore client — no global state.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
-from sqlalchemy.orm import Session as DBSession
-
-from backend.db import models
+from google.cloud.firestore_v1 import Client as FirestoreClient
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 logger = logging.getLogger(__name__)
 
@@ -20,43 +20,54 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def _delete_collection(col_ref, batch_size: int = 100) -> None:
+    """Delete all documents in a Firestore collection."""
+    while True:
+        docs = list(col_ref.limit(batch_size).stream())
+        if not docs:
+            break
+        for doc in docs:
+            # Delete subcollections first (Firestore doesn't cascade)
+            for subcol in doc.reference.collections():
+                _delete_collection(subcol, batch_size)
+            doc.reference.delete()
+        if len(docs) < batch_size:
+            break
+
+
 # ---------------------------------------------------------------------------
 # sessions
 # ---------------------------------------------------------------------------
 
-def upsert_session(db: DBSession, session_id: str, status: str = "idle") -> models.Session:
-    row = db.query(models.Session).filter_by(id=session_id).first()
-    if row:
-        row.status = status
-        row.updated_at = _now()
+def upsert_session(db: FirestoreClient, session_id: str, status: str = "idle") -> dict:
+    ref = db.collection("sessions").document(session_id)
+    doc = ref.get()
+    now = _now()
+    if doc.exists:
+        ref.update({"status": status, "updated_at": now})
     else:
-        row = models.Session(id=session_id, status=status)
-        db.add(row)
-    db.commit()
-    return row
+        ref.set({"status": status, "created_at": now, "updated_at": now})
+    return {"id": session_id, "status": status}
 
 
-def update_session_status(db: DBSession, session_id: str, status: str) -> None:
-    row = db.query(models.Session).filter_by(id=session_id).first()
-    if row:
-        row.status = status
-        row.updated_at = _now()
-        db.commit()
+def update_session_status(db: FirestoreClient, session_id: str, status: str) -> None:
+    db.collection("sessions").document(session_id).update(
+        {"status": status, "updated_at": _now()}
+    )
 
 
 # ---------------------------------------------------------------------------
 # conversations
 # ---------------------------------------------------------------------------
 
-def save_conversation(db: DBSession, session_id: str, transcript: str) -> models.Conversation:
-    row = db.query(models.Conversation).filter_by(session_id=session_id).first()
-    if row:
-        row.transcript = transcript
-    else:
-        row = models.Conversation(session_id=session_id, transcript=transcript)
-        db.add(row)
-    db.commit()
-    return row
+def save_conversation(db: FirestoreClient, session_id: str, transcript: str) -> dict:
+    ref = (
+        db.collection("sessions").document(session_id)
+        .collection("conversations").document("main")
+    )
+    data = {"session_id": session_id, "transcript": transcript, "created_at": _now()}
+    ref.set(data, merge=True)
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -64,111 +75,121 @@ def save_conversation(db: DBSession, session_id: str, transcript: str) -> models
 # ---------------------------------------------------------------------------
 
 def save_story_breakdown(
-    db: DBSession,
+    db: FirestoreClient,
     session_id: str,
     breakdown,  # StoryBreakdown from state.py
 ) -> None:
-    """Persist the full story breakdown (story, characters, props) to Postgres."""
+    """Persist the full story breakdown (story, characters, props) to Firestore."""
+    sess_ref = db.collection("sessions").document(session_id)
+    now = _now()
 
     # -- story --
-    story = db.query(models.Story).filter_by(session_id=session_id).first()
-    if not story:
-        story = models.Story(
-            session_id=session_id,
-            special_instructions=breakdown.special_instructions,
-        )
-        db.add(story)
-    else:
-        story.special_instructions = breakdown.special_instructions
+    sess_ref.collection("story").document("main").set({
+        "special_instructions": breakdown.special_instructions,
+        "created_at": now,
+    }, merge=True)
 
-    # -- scenes (delete + recreate for simplicity) --
-    db.query(models.SubScene).filter(
-        models.SubScene.scene_id.in_(
-            db.query(models.Scene.id).filter_by(session_id=session_id)
-        )
-    ).delete(synchronize_session="fetch")
-    db.query(models.Scene).filter_by(session_id=session_id).delete()
-
+    # -- scenes (delete + recreate) --
+    _delete_collection(sess_ref.collection("scenes"))
     for i, text in enumerate(breakdown.story, start=1):
-        scene = models.Scene(session_id=session_id, scene_index=i, text=text)
-        db.add(scene)
+        sess_ref.collection("scenes").document(f"scene_{i}").set({
+            "scene_index": i,
+            "text": text,
+            "summary": "",
+            "narration_minio_key": None,
+            "created_at": now,
+        })
 
     # -- characters --
-    db.query(models.Character).filter_by(session_id=session_id).delete()
+    _delete_collection(sess_ref.collection("characters"))
     for cp in breakdown.characters_prompts:
-        db.add(models.Character(
-            session_id=session_id,
-            name=cp.name,
-            description=cp.description,
-        ))
+        sess_ref.collection("characters").add({
+            "name": cp.name,
+            "description": cp.description,
+            "image_minio_key": None,
+            "created_at": now,
+        })
 
     # -- props --
-    db.query(models.Prop).filter_by(session_id=session_id).delete()
+    _delete_collection(sess_ref.collection("props"))
     for p in breakdown.prop_descriptions:
-        db.add(models.Prop(
-            session_id=session_id,
-            name=p.name,
-            description=p.description,
-        ))
-
-    db.commit()
+        sess_ref.collection("props").add({
+            "name": p.name,
+            "description": p.description,
+            "created_at": now,
+        })
 
 
-def save_visual_plan(db: DBSession, session_id: str, visual_plan) -> None:
+def save_visual_plan(db: FirestoreClient, session_id: str, visual_plan) -> None:
     """Persist subscenes from the visual plan."""
-    scenes = db.query(models.Scene).filter_by(session_id=session_id).order_by(models.Scene.scene_index).all()
-    scene_map = {s.scene_index: s for s in scenes}
+    sess_ref = db.collection("sessions").document(session_id)
+    scenes_ref = sess_ref.collection("scenes")
+    now = _now()
 
     for sp in visual_plan.scenes:
-        scene = scene_map.get(sp.scene_index)
-        if not scene:
+        scene_doc_id = f"scene_{sp.scene_index}"
+        scene_ref = scenes_ref.document(scene_doc_id)
+
+        doc = scene_ref.get()
+        if not doc.exists:
             continue
-        scene.summary = sp.scene_summary
+
+        scene_ref.update({"summary": sp.scene_summary})
 
         # Delete old subscenes for this scene
-        db.query(models.SubScene).filter_by(scene_id=scene.id).delete()
+        _delete_collection(scene_ref.collection("subscenes"))
 
         for sub in sp.subscenes:
-            db.add(models.SubScene(
-                scene_id=scene.id,
-                sub_index=sub.index,
-                image_prompt=sub.image_prompt,
-                video_prompt=sub.video_prompt,
-            ))
-
-    db.commit()
-
-
-def update_character_image(db: DBSession, session_id: str, name: str, minio_key: str) -> None:
-    row = db.query(models.Character).filter_by(session_id=session_id, name=name).first()
-    if row:
-        row.image_minio_key = minio_key
-        db.commit()
+            scene_ref.collection("subscenes").document(f"sub_{sub.index}").set({
+                "sub_index": sub.index,
+                "image_prompt": sub.image_prompt,
+                "video_prompt": sub.video_prompt,
+                "image_minio_key": None,
+                "video_minio_key": None,
+                "created_at": now,
+            })
 
 
-def update_narration_key(db: DBSession, session_id: str, scene_index: int, minio_key: str) -> None:
-    row = db.query(models.Scene).filter_by(session_id=session_id, scene_index=scene_index).first()
-    if row:
-        row.narration_minio_key = minio_key
-        db.commit()
+def update_character_image(db: FirestoreClient, session_id: str, name: str, minio_key: str) -> None:
+    chars_ref = (
+        db.collection("sessions").document(session_id)
+        .collection("characters")
+    )
+    docs = list(chars_ref.where(filter=FieldFilter("name", "==", name)).limit(1).stream())
+    if docs:
+        docs[0].reference.update({"image_minio_key": minio_key})
 
 
-def update_subscene_image(db: DBSession, session_id: str, scene_idx: int, sub_idx: int, minio_key: str) -> None:
-    scene = db.query(models.Scene).filter_by(session_id=session_id, scene_index=scene_idx).first()
-    if scene:
-        sub = db.query(models.SubScene).filter_by(scene_id=scene.id, sub_index=sub_idx).first()
-        if sub:
-            sub.image_minio_key = minio_key
-            db.commit()
+def update_narration_key(db: FirestoreClient, session_id: str, scene_index: int, minio_key: str) -> None:
+    scene_ref = (
+        db.collection("sessions").document(session_id)
+        .collection("scenes").document(f"scene_{scene_index}")
+    )
+    doc = scene_ref.get()
+    if doc.exists:
+        scene_ref.update({"narration_minio_key": minio_key})
 
 
-def update_subscene_video(db: DBSession, session_id: str, scene_idx: int, sub_idx: int, minio_key: str) -> None:
-    scene = db.query(models.Scene).filter_by(session_id=session_id, scene_index=scene_idx).first()
-    if scene:
-        sub = db.query(models.SubScene).filter_by(scene_id=scene.id, sub_index=sub_idx).first()
-        if sub:
-            sub.video_minio_key = minio_key
-            db.commit()
+def update_subscene_image(db: FirestoreClient, session_id: str, scene_idx: int, sub_idx: int, minio_key: str) -> None:
+    sub_ref = (
+        db.collection("sessions").document(session_id)
+        .collection("scenes").document(f"scene_{scene_idx}")
+        .collection("subscenes").document(f"sub_{sub_idx}")
+    )
+    doc = sub_ref.get()
+    if doc.exists:
+        sub_ref.update({"image_minio_key": minio_key})
+
+
+def update_subscene_video(db: FirestoreClient, session_id: str, scene_idx: int, sub_idx: int, minio_key: str) -> None:
+    sub_ref = (
+        db.collection("sessions").document(session_id)
+        .collection("scenes").document(f"scene_{scene_idx}")
+        .collection("subscenes").document(f"sub_{sub_idx}")
+    )
+    doc = sub_ref.get()
+    if doc.exists:
+        sub_ref.update({"video_minio_key": minio_key})
 
 
 # ---------------------------------------------------------------------------
@@ -176,41 +197,48 @@ def update_subscene_video(db: DBSession, session_id: str, scene_idx: int, sub_id
 # ---------------------------------------------------------------------------
 
 def record_step(
-    db: DBSession,
+    db: FirestoreClient,
     session_id: str,
     step: str,
     status: str,
     message: str = "",
-) -> models.PipelineStep:
+) -> dict:
+    """Record a pipeline step.
+
+    Uses the step name as the document ID so updates are simple upserts
+    and no composite index is needed.
+    """
     now = _now()
-    # If status is "running", it's a new step start
+    step_ref = (
+        db.collection("sessions").document(session_id)
+        .collection("pipeline_steps").document(step)
+    )
+
+    doc = step_ref.get()
     if status == "running":
-        row = models.PipelineStep(
-            session_id=session_id, step=step, status=status,
-            message=message, started_at=now,
-        )
-        db.add(row)
+        step_ref.set({
+            "step": step,
+            "status": status,
+            "message": message,
+            "started_at": now,
+            "finished_at": None,
+        })
+    elif doc.exists and doc.to_dict().get("status") == "running":
+        step_ref.update({
+            "status": status,
+            "message": message,
+            "finished_at": now,
+        })
     else:
-        # Update the most recent running entry for this step
-        row = (
-            db.query(models.PipelineStep)
-            .filter_by(session_id=session_id, step=step, status="running")
-            .order_by(models.PipelineStep.id.desc())
-            .first()
-        )
-        if row:
-            row.status = status
-            row.message = message
-            row.finished_at = now
-        else:
-            # No running entry — just insert
-            row = models.PipelineStep(
-                session_id=session_id, step=step, status=status,
-                message=message, started_at=now, finished_at=now,
-            )
-            db.add(row)
-    db.commit()
-    return row
+        step_ref.set({
+            "step": step,
+            "status": status,
+            "message": message,
+            "started_at": now,
+            "finished_at": now,
+        })
+
+    return {"id": step, "step": step, "status": status}
 
 
 # ---------------------------------------------------------------------------
@@ -218,58 +246,82 @@ def record_step(
 # ---------------------------------------------------------------------------
 
 def record_edit(
-    db: DBSession,
+    db: FirestoreClient,
     session_id: str,
     user_message: str,
     reasoning: str,
     dirty_keys: list[str],
-) -> models.EditHistory:
-    row = models.EditHistory(
-        session_id=session_id,
-        user_message=user_message,
-        reasoning=reasoning,
-        dirty_keys=dirty_keys,
+) -> dict:
+    data = {
+        "user_message": user_message,
+        "reasoning": reasoning,
+        "dirty_keys": dirty_keys,
+        "created_at": _now(),
+    }
+    (
+        db.collection("sessions").document(session_id)
+        .collection("edit_history").add(data)
     )
-    db.add(row)
-    db.commit()
-    return row
+    return data
 
 
 # ---------------------------------------------------------------------------
 # errors
 # ---------------------------------------------------------------------------
 
-def record_error(db: DBSession, session_id: str, message: str, step: str | None = None) -> models.Error:
-    row = models.Error(session_id=session_id, step=step, message=message)
-    db.add(row)
-    db.commit()
-    return row
+def record_error(db: FirestoreClient, session_id: str, message: str, step: str | None = None) -> dict:
+    data = {
+        "step": step,
+        "message": message,
+        "created_at": _now(),
+    }
+    (
+        db.collection("sessions").document(session_id)
+        .collection("errors").add(data)
+    )
+    return data
 
 
 # ---------------------------------------------------------------------------
 # page_views (user stage tracking)
 # ---------------------------------------------------------------------------
 
-def track_page_view(db: DBSession, session_id: str | None, page: str) -> models.PageView:
-    row = models.PageView(session_id=session_id, page=page)
-    db.add(row)
-    db.commit()
-    return row
+def track_page_view(db: FirestoreClient, session_id: str | None, page: str) -> dict:
+    data = {
+        "session_id": session_id,
+        "page": page,
+        "created_at": _now(),
+    }
+    _, doc_ref = db.collection("page_views").add(data)
+    data["id"] = doc_ref.id
+    return data
 
 
-def get_page_views(db: DBSession, session_id: str | None = None, limit: int = 100) -> list[models.PageView]:
-    q = db.query(models.PageView)
+def get_page_views(db: FirestoreClient, session_id: str | None = None, limit: int = 100) -> list[dict]:
+    ref = db.collection("page_views")
     if session_id:
-        q = q.filter_by(session_id=session_id)
-    return q.order_by(models.PageView.id.desc()).limit(limit).all()
+        # Single-field filter only — avoids composite index requirement
+        ref = ref.where(filter=FieldFilter("session_id", "==", session_id))
+    docs = ref.limit(limit).stream()
+    results = []
+    for doc in docs:
+        d = doc.to_dict()
+        d["id"] = doc.id
+        results.append(d)
+    # Sort in Python to avoid needing a composite index
+    results.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+    return results
 
 
-def get_current_page(db: DBSession, session_id: str) -> str | None:
-    row = (
-        db.query(models.PageView)
-        .filter_by(session_id=session_id)
-        .order_by(models.PageView.id.desc())
-        .first()
+def get_current_page(db: FirestoreClient, session_id: str) -> str | None:
+    docs = list(
+        db.collection("page_views")
+        .where(filter=FieldFilter("session_id", "==", session_id))
+        .limit(50)
+        .stream()
     )
-    return row.page if row else None
-
+    if not docs:
+        return None
+    # Find the most recent by created_at in Python
+    latest = max(docs, key=lambda d: d.to_dict().get("created_at", ""))
+    return latest.to_dict().get("page")
