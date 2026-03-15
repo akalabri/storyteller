@@ -444,7 +444,7 @@ export function createStoryScreen(
       }
 
       if (versionTextEl) {
-        versionTextEl.textContent = `Version ${videoData.version}`;
+        versionTextEl.textContent = videoData.version > 1 ? 'Edited Version' : 'Original';
       }
 
       if (stateData?.breakdown) {
