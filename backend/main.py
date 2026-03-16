@@ -35,8 +35,11 @@ import asyncio
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from fastapi import (
     BackgroundTasks,
@@ -924,25 +927,77 @@ async def get_dev_mode() -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Page tracking
+# Page tracking + visitor logging
 # ---------------------------------------------------------------------------
 
+_VISITOR_LOG = Path("/app/sessions/visitor_log.jsonl")
+
+
+def _get_client_ip(http_request: Request) -> str:
+    forwarded_for = http_request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    real_ip = http_request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+    if http_request.client:
+        return http_request.client.host
+    return "unknown"
+
+
+async def _geolocate(ip: str) -> dict:
+    if ip in ("unknown", "127.0.0.1", "::1"):
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            resp = await client.get(f"http://ip-api.com/json/{ip}?fields=status,country,regionName,city,isp,org,lat,lon")
+            data = resp.json()
+            if data.get("status") == "success":
+                return {k: data[k] for k in ("country", "regionName", "city", "isp", "org", "lat", "lon") if k in data}
+    except Exception:
+        pass
+    return {}
+
+
+def _append_visitor_log(entry: dict) -> None:
+    try:
+        _VISITOR_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _VISITOR_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except Exception as exc:
+        logger.warning("Could not write visitor log: %s", exc)
+
+
 class TrackPageRequest(BaseModel):
-    page: str                    # LANDING | CONVERSATION | PROCESSING | RESULT
+    page: str                    # LANDING | CONVERSATION | PROCESSING | RESULT | VISIT
     session_id: str | None = None
 
 
 @app.post("/api/track")
-async def track_page(request: TrackPageRequest) -> JSONResponse:
+async def track_page(body: TrackPageRequest, http_request: Request) -> JSONResponse:
     """Record that a user navigated to a page."""
+    ip = _get_client_ip(http_request)
+    geo = await _geolocate(ip)
+    now = datetime.now(timezone.utc).isoformat()
+
+    entry: dict = {
+        "ts": now,
+        "ip": ip,
+        "page": body.page,
+        "session_id": body.session_id,
+        **geo,
+        "ua": http_request.headers.get("User-Agent", ""),
+    }
+    _append_visitor_log(entry)
+
     db = get_db()
     try:
-        row = db_crud.track_page_view(db, request.session_id, request.page)
-        logger.info("Page view: %s → %s", request.session_id or "anonymous", request.page)
+        row = db_crud.track_page_view(db, body.session_id, body.page)
+        logger.info("Visit: %s %s %s → %s", ip, geo.get("city", ""), geo.get("country", ""), body.page)
         return JSONResponse({
-            "id": row.id,
-            "session_id": row.session_id,
-            "page": row.page,
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "page": row["page"],
         })
     finally:
         db.close()
@@ -955,7 +1010,7 @@ async def get_tracking(session_id: str | None = None) -> JSONResponse:
     try:
         rows = db_crud.get_page_views(db, session_id)
         return JSONResponse([
-            {"id": r.id, "session_id": r.session_id, "page": r.page, "created_at": str(r.created_at)}
+            {"id": r["id"], "session_id": r["session_id"], "page": r["page"], "created_at": str(r["created_at"])}
             for r in rows
         ])
     finally:
