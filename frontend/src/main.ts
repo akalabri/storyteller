@@ -430,7 +430,20 @@ async function restoreActiveGens() {
 // App Bootstrap
 // ============================================================
 
+function _logVisit(): void {
+  try {
+    fetch('/api/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page: 'VISIT', session_id: null }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch { /* silent */ }
+}
+
 async function buildApp() {
+  _logVisit();
+
   const app = document.getElementById('app');
   if (!app) throw new Error('#app not found');
 
