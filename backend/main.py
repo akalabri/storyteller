@@ -47,7 +47,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from backend.agents.conversation_agent import run_live_conversation
@@ -477,7 +477,7 @@ async def get_thumbnail(session_id: str):
     minio_key = session_object_key(session_id, f"scenes/{img_path.name}")
     if object_exists_sync(minio_key):
         url = await presigned_url(minio_key)
-        return JSONResponse({"thumbnail_url": url})
+        return RedirectResponse(url=url)
 
     raise HTTPException(status_code=404, detail="Thumbnail image not found")
 

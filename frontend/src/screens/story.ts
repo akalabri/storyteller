@@ -494,16 +494,37 @@ export function createStoryScreen(
   const copyBtn = screen.querySelector<HTMLButtonElement>('#share-copy-link');
   copyBtn?.addEventListener('click', () => {
     const url = `${window.location.origin}?preview=4&session=${sessionId}`;
-    navigator.clipboard.writeText(url).then(() => {
+
+    const showCopied = () => {
       if (!copyBtn) return;
       const origSvg = copyBtn.innerHTML;
       copyBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:#fff"><polyline points="20 6 9 17 4 12"/></svg>`;
       copyBtn.classList.add('share-btn-copied');
+      copyBtn.title = 'Copied!';
       setTimeout(() => {
         copyBtn.innerHTML = origSvg;
         copyBtn.classList.remove('share-btn-copied');
+        copyBtn.title = 'Copy Link';
       }, 1500);
-    }).catch(() => console.warn('Clipboard write failed'));
+    };
+
+    const fallbackCopy = () => {
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      ta.style.cssText = 'position:fixed;top:-9999px;left:-9999px;opacity:0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
+      showCopied();
+    };
+
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(url).then(showCopied).catch(fallbackCopy);
+    } else {
+      fallbackCopy();
+    }
   });
 
   // QR Code popup
